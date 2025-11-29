@@ -1,0 +1,13 @@
+**Character Description: Cool Cyborg Cat**
+
+**Full Body Structure:**  
+The character is a sleek, anthropomorphic cat standing approximately 5 feet tall. The body is a blend of organic feline features and high-tech robotic elements, giving it a unique, cool aesthetic. The cat has a lithe, muscular build, allowing for agile movement, with a clear segmentation of all body parts.
+
+**Pose:**  
+The cyborg cat is in a neutral standing pose, angled at a 3/4 view to the right. Its arms are slightly away from its torso, with hands relaxed and fingers slightly splayed. The legs are straight, standing firmly on the ground, and the tail is held upright, accentuating its confident demeanor.
+
+**Head:**  
+The head is cat-like, with a tapered snout and large, expressive golden-yellow eyes that glow faintly, hinting at its cybernetic enhancements. The ears are pointed and adorned with small antennas that flicker occasionally, indicating sensor activity. The fur is a rich midnight blue, while sections of the face are covered in sleek silver plating, particularly around the forehead and cheeks, integrating seamlessly with the organic fur.
+
+**Neck:**  
+The neck is slender yet strong, connecting the head to Full body view, character at 3/4 angle view (not facing straight front), neutral standing pose with arms slightly away from torso/body and hands also away from the body, all body parts clearly separated and visible, no overlapping parts, visible joints for animation rigging. If the character has appendages like tails, wings, or horns, ensure they are clearly visible and separated from the main body structure.

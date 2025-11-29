@@ -1,0 +1,10 @@
+**Character Description: Cool Dog**
+
+**Full Body Structure:**
+The Cool Dog stands at an average height for a medium-sized dog, approximately 24 inches tall at the shoulder. Its body is well-proportioned, showcasing athletic build with a defined neck leading to a broad chest and a tapered waist. The legs are strong and slightly muscular, supporting a confident stance.
+
+**Head:**
+The head is slightly rounded with a prominent, flat snout. The Cool Dog has large, expressive almond-shaped eyes that are a vibrant shade of electric blue, giving an intelligent and playful appearance. Its ears are floppy, slightly oversized, and hang down on either side of the head, with the inner fur having a lighter cream color that contrasts with the main fur coat. The muzzle is adorned with a black, shiny nose and a wide grin showing a playful demeanor, with a neutral expression that can easily transition to excitement.
+
+**Neck and Torso:**
+The neck is strong and slightly thick, leading into a well-defined torso. The Cool Dog’s fur is sleek and shiny, predominantly a rich chocolate brown with subtle lighter streaks running down the sides, giving it a stylish and cool look. The torso is compact, with a visible ribcage and Full body view, neutral standing pose with arms slightly away from body, all body parts clearly separated and visible, no overlapping parts, visible joints for animation rigging. If the character has appendages like tails, wings, or horns, ensure they are clearly visible and separated from the main body structure.

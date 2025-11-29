@@ -1,0 +1,18 @@
+# Core web application
+flask>=3.0.0
+python-dotenv>=1.0.0
+
+# API clients
+openai>=1.0.0
+requests>=2.28.0
+
+# Image processing / background removal
+pillow>=10.0.0
+rembg>=2.0.0
+opencv-python>=4.8.0
+numpy>=1.24.0,<2.0
+onnxruntime>=1.15.0
+mediapipe>=0.10.0
+
+# Spine export & animation
+scipy>=1.11.0

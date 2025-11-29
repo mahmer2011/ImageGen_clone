@@ -1,0 +1,11 @@
+**Character Description:**
+
+**Name:** Vesper
+
+**Body Structure:** Vesper stands confidently at an athletic height of 5'8", her body is well-proportioned with a toned physique that suggests both strength and agility. She displays a relaxed yet assertive neutral pose, with her arms slightly away from her torso, hands open and relaxed at her sides. Her legs are straight and evenly spaced, showcasing her stability and readiness for action.
+
+**Viewing Angle:** Vesper is presented in a 3/4 view, slightly turned to her left, which allows for better visibility of her profile as well as her stylish attire.
+
+**Head and Facial Features:** Vesper has a heart-shaped face with high cheekbones and a defined jawline. Her almond-shaped eyes are a striking emerald green, framed by long, dark lashes. She possesses a subtle, confident smile that reflects her cool demeanor. Her lips are full and tinted a natural rose color. Vesper’s hair is a vibrant midnight blue, cascading in loose waves down to her mid-back, with a few rebellious strands framing her face. 
+
+**Neck and Torso:** Vesper's neck is slender, leading down to a defined collarbone. She wears a fitted black leather jacket Full body view, character at 3/4 angle view (not facing straight front), neutral standing pose with arms slightly away from torso/body and hands also away from the body, all body parts clearly separated and visible, no overlapping parts, visible joints for animation rigging. If the character has appendages like tails, wings, or horns, ensure they are clearly visible and separated from the main body structure.

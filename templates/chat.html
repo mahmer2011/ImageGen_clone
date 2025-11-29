@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Spine2D Animation Chat</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/spine_viewer.css') }}" />
+    <!-- PixiJS and pixi-spine -->
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.8/dist/browser/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-spine@4.0.4/dist/pixi-spine.umd.js"></script>
+    <style>
+      body {
+        max-width: 1400px;
+        margin: 2rem auto;
+      }
+
+      .main-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2rem;
+        height: calc(100vh - 4rem);
+      }
+
+      .chat-section {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background: white;
+        overflow: hidden;
+      }
+
+      .chat-header {
+        padding: 1rem;
+        background: #0d6efd;
+        color: white;
+        font-weight: 600;
+        font-size: 1.2rem;
+      }
+
+      .chat-messages {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem;
+        background: #f8f9fa;
+      }
+
+      .message {
+        margin-bottom: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+        max-width: 80%;
+      }
+
+      .message.user {
+        background: #0d6efd;
+        color: white;
+        margin-left: auto;
+      }
+
+      .message.assistant {
+        background: white;
+        border: 1px solid #dee2e6;
+      }
+
+      .message-time {
+        font-size: 0.75rem;
+        opacity: 0.7;
+        margin-top: 0.25rem;
+      }
+
+      .chat-input-area {
+        padding: 1rem;
+        border-top: 1px solid #dee2e6;
+        background: white;
+      }
+
+      .chat-input-form {
+        display: flex;
+        gap: 0.5rem;
+      }
+
+      .chat-input-form input {
+        flex: 1;
+        margin-bottom: 0;
+      }
+
+      .chat-input-form button {
+        margin-bottom: 0;
+        white-space: nowrap;
+      }
+
+      .preview-section {
+        display: flex;
+        flex-direction: column;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        background: white;
+        overflow: hidden;
+      }
+
+      .preview-header {
+        padding: 1rem;
+        background: #198754;
+        color: white;
+        font-weight: 600;
+        font-size: 1.2rem;
+      }
+
+      .preview-content {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem;
+      }
+
+      .welcome-message {
+        text-align: center;
+        padding: 2rem;
+        color: #6c757d;
+      }
+
+      .loading {
+        text-align: center;
+        padding: 1rem;
+        color: #6c757d;
+        font-style: italic;
+      }
+
+      @media (max-width: 1024px) {
+        .main-layout {
+          grid-template-columns: 1fr;
+          height: auto;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Spine2D Animation Chat Interface</h1>
+      <p>
+        Use natural language to create and control animations! Try commands like:
+        "create a blue cat", "make the jump faster", "add a wave animation", or "export project".
+      </p>
+
+      <div class="main-layout">
+        <!-- Chat Section -->
+        <div class="chat-section">
+          <div class="chat-header">Chat</div>
+          <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message">
+              <p><strong>Welcome to the Spine2D Animation Chat!</strong></p>
+              <p>Start by describing what you'd like to create, or ask for help.</p>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <form class="chat-input-form" onsubmit="sendMessage(event)">
+              <input
+                type="text"
+                id="chat-input"
+                placeholder="Type your message..."
+                required
+                autocomplete="off"
+              />
+              <button type="submit">Send</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Preview Section -->
+        <div class="preview-section">
+          <div class="preview-header">Animation Preview</div>
+          <div class="preview-content">
+            <div id="preview-welcome" class="welcome-message">
+              <p>Animation preview will appear here once you create a character.</p>
+            </div>
+            
+            <div id="spine-viewer-section" class="spine-viewer-container" style="display: none;">
+              <canvas id="spine-canvas" width="600" height="500"></canvas>
+              
+              <div class="animation-controls">
+                <button onclick="playAnimation('idle')">Idle</button>
+                <button onclick="playAnimation('walk')">Walk</button>
+                <button onclick="playAnimation('jump')">Jump</button>
+                <button onclick="playAnimation('wave_r')">Wave Right</button>
+                <button onclick="playAnimation('wave_l')">Wave Left</button>
+              </div>
+
+              <div class="playback-controls">
+                <button onclick="stopAnimation()">Stop</button>
+                <div class="speed-control">
+                  <label>Speed:</label>
+                  <input type="range" id="speed-slider" min="0.1" max="2.0" step="0.1" value="1.0" onchange="setSpeed(this.value)">
+                  <span id="speed-value">1.0x</span>
+                </div>
+              </div>
+
+              <div class="current-animation" id="current-animation">
+                No animation playing
+              </div>
+
+              <button onclick="exportSpineProject()" style="margin-top: 1rem;" class="generate-button">
+                Export Spine Project (ZIP)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/spine_viewer.js', v='20251121') }}"></script>
+    <script>
+      let spineViewer = null;
+      let currentImageId = null;
+
+      function addMessage(role, content) {
+        const messagesDiv = document.getElementById('chat-messages');
+        const welcomeMsg = messagesDiv.querySelector('.welcome-message');
+        if (welcomeMsg) {
+          welcomeMsg.remove();
+        }
+
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${role}`;
+        
+        const contentDiv = document.createElement('div');
+        contentDiv.textContent = content;
+        
+        const timeDiv = document.createElement('div');
+        timeDiv.className = 'message-time';
+        timeDiv.textContent = new Date().toLocaleTimeString();
+        
+        messageDiv.appendChild(contentDiv);
+        messageDiv.appendChild(timeDiv);
+        messagesDiv.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      }
+
+      async function sendMessage(event) {
+        event.preventDefault();
+        
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        
+        if (!message) return;
+        
+        // Add user message
+        addMessage('user', message);
+        input.value = '';
+        
+        // Show loading
+        const loadingId = 'loading-' + Date.now();
+        const messagesDiv = document.getElementById('chat-messages');
+        const loadingDiv = document.createElement('div');
+        loadingDiv.id = loadingId;
+        loadingDiv.className = 'loading';
+        loadingDiv.textContent = 'Processing...';
+        messagesDiv.appendChild(loadingDiv);
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        
+        try {
+          const response = await fetch('/chat/message', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message: message })
+          });
+          
+          const data = await response.json();
+          
+          // Remove loading
+          document.getElementById(loadingId)?.remove();
+          
+          // Add assistant response
+          addMessage('assistant', data.response);
+          
+          // Handle special actions
+          if (data.action === 'play' && data.data?.animation) {
+            playAnimation(data.data.animation);
+          }
+        } catch (error) {
+          document.getElementById(loadingId)?.remove();
+          addMessage('assistant', 'Sorry, I encountered an error: ' + error.message);
+        }
+      }
+
+      async function playAnimation(animName) {
+        if (!spineViewer || !spineViewer.isLoaded) {
+          addMessage('assistant', 'Please create a character first using the main interface.');
+          return;
+        }
+
+        spineViewer.playAnimation(animName, true);
+        updateCurrentAnimation(animName);
+      }
+
+      function stopAnimation() {
+        if (spineViewer) {
+          spineViewer.stopAnimation();
+          updateCurrentAnimation(null);
+        }
+      }
+
+      function setSpeed(speed) {
+        if (spineViewer) {
+          spineViewer.setSpeed(parseFloat(speed));
+          document.getElementById('speed-value').textContent = speed + 'x';
+        }
+      }
+
+      function updateCurrentAnimation(animName) {
+        const display = document.getElementById('current-animation');
+        if (animName) {
+          display.textContent = 'Playing: ' + animName;
+        } else {
+          display.textContent = 'No animation playing';
+        }
+      }
+
+      function exportSpineProject() {
+        if (!currentImageId) {
+          addMessage('assistant', 'No Spine project to export. Please create a character first.');
+          return;
+        }
+
+        window.location.href = `/export-spine/${currentImageId}`;
+      }
+
+      // Check if there's an existing spine project and load it
+      // This would need to be populated by the backend
+    </script>
+  </body>
+</html>
+

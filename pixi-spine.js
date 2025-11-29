@@ -1,0 +1,1 @@
+Couldn't find the requested file /dist/pixi-spine.js in @pixi-spine/all-4.1.

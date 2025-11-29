@@ -1,0 +1,10 @@
+**Character Description: Cool Wonder Woman**
+
+**Full Body Structure:**  
+The character stands at an athletic height, showcasing a well-defined yet feminine physique that embodies strength and agility. She is positioned in a neutral standing pose, angled slightly to the right (3/4 view), with her torso relaxed and arms gently bent at the elbows, slightly away from her body. Her legs are straight and firmly planted, emphasizing her grounded stance. 
+
+**Head:**  
+Her head is adorned with a crown-like tiara that features a prominent star at the center, reflecting her heroic status. She has long, flowing dark hair that cascades down her back in soft waves, with two sections braided and pulled over her shoulders. Her eyes are a striking blue, framed by long eyelashes, and her expression is neutral yet fierce, with slightly arched eyebrows and a determined gaze. Her lips are full and painted a deep red, adding to her bold appearance.
+
+**Neck and Torso:**  
+The neck is slender and strong, leading down to a defined torso clad in a modernized version of her iconic armor. The upper body is covered in a fitted, dark blue top that features a golden eagle emblem across her chest. The armor has sleek lines and a slight Full body view, character presented in a 3/4 view, slightly turned to the left, T-pose with arms extended horizontally at shoulder level (arms forming a T shape), neutral standing pose with legs straight, all body parts clearly separated and visible, no overlapping parts, visible joints for animation rigging.

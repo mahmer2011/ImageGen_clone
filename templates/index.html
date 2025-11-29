@@ -1,0 +1,564 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BFL Image Generator</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css"
+    />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/spine_viewer.css') }}" />
+    <!-- PixiJS and pixi-spine -->
+    <script src="https://cdn.jsdelivr.net/npm/pixi.js@6.5.8/dist/browser/pixi.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pixi-spine@4.0.4/dist/pixi-spine.umd.js"></script>
+    <script>
+      // Verify pixi-spine loaded correctly
+      window.addEventListener('load', function() {
+        console.log('PIXI loaded:', typeof PIXI !== 'undefined');
+        console.log('PIXI.spine loaded:', typeof PIXI !== 'undefined' && typeof PIXI.spine !== 'undefined');
+        if (typeof PIXI !== 'undefined' && PIXI.spine) {
+          console.log('PIXI.spine.Spine:', typeof PIXI.spine.Spine);
+          console.log('PIXI.Loader:', typeof PIXI.Loader);
+        }
+      });
+    </script>
+    <style>
+      body {
+        max-width: 1200px;
+        margin: 2rem auto;
+      }
+
+      textarea {
+        min-height: 160px;
+        resize: vertical;
+      }
+
+      .flash-messages {
+        list-style: none;
+        padding: 0;
+      }
+
+      .flash-messages li {
+        margin-bottom: 0.75rem;
+        padding: 0.75rem 1rem;
+        border-radius: 0.5rem;
+        background: #f4f4f4;
+      }
+
+      .flash-messages li.success {
+        background: #e6f7ed;
+        border: 1px solid #94d3ac;
+      }
+
+      .content-wrapper {
+        display: flex;
+        gap: 2rem;
+        align-items: flex-start;
+      }
+
+      .prompt-section {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .image-preview {
+        flex: 1;
+        min-width: 0;
+        position: sticky;
+        top: 2rem;
+      }
+
+      .image-preview img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 0.75rem;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+      }
+
+      .enhanced-prompt-section {
+        margin-top: 2rem;
+        padding: 1.5rem;
+        background: #f8f9fa;
+        border-radius: 0.5rem;
+        border: 1px solid #dee2e6;
+      }
+
+      .enhanced-prompt-section h3 {
+        margin-top: 0;
+        margin-bottom: 1rem;
+        font-size: 1.1rem;
+        color: #495057;
+      }
+
+      .enhanced-prompt-textarea {
+        width: 100%;
+        min-height: 200px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+        border: 1px solid #ced4da;
+        border-radius: 0.375rem;
+        font-family: inherit;
+        font-size: 1rem;
+        line-height: 1.6;
+        resize: vertical;
+        background: white;
+      }
+
+      .enhanced-prompt-textarea:focus {
+        outline: none;
+        border-color: #0d6efd;
+        box-shadow: 0 0 0 0.2rem rgba(13, 110, 253, 0.25);
+      }
+
+      .upload-section {
+        margin-top: 2rem;
+        padding: 1.5rem;
+        border: 1px dashed #ced4da;
+        border-radius: 0.5rem;
+        background: #ffffff;
+      }
+
+      .upload-section form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+      }
+
+      .generate-button {
+        width: 100%;
+        margin-top: 0.5rem;
+      }
+
+      .info-text {
+        margin: 0 0 1rem 0;
+        color: #6c757d;
+        font-size: 0.875rem;
+      }
+
+      .mask-gallery {
+        margin-top: 1.5rem;
+      }
+
+      .mask-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+        gap: 1rem;
+      }
+
+      .mask-grid figure {
+        margin: 0;
+        background: #f4f4f4;
+        border-radius: 0.75rem;
+        padding: 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .mask-grid img {
+        max-width: 100%;
+        max-height: 260px;
+        height: auto;
+        border-radius: 0.5rem;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+        background: white;
+      }
+
+      .assembly-preview {
+        margin-top: 1.5rem;
+        padding: 1rem;
+        border-radius: 0.75rem;
+        background: #ffffff;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+      }
+
+      .assembly-preview img {
+        display: block;
+        max-width: 100%;
+        height: auto;
+        border-radius: 0.5rem;
+      }
+
+      @media (max-width: 768px) {
+        .content-wrapper {
+          flex-direction: column;
+        }
+
+        .image-preview {
+          position: static;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Animation Character Generator</h1>
+      <p>
+        Create animation-ready characters! Enter a simple character description and click "Enhance Prompt" to get an AI-enhanced version 
+        optimized for animation with full body structure, clear appendages, and proper segmentation. 
+        You can edit the enhanced prompt before generating the image. The generated image will appear on the right once ready.
+      </p>
+      <p>
+        <strong>🎮 New: <a href="/chat">Try the Chat Interface</a></strong> - Use natural language to create and control animations!
+      </p>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <ul class="flash-messages">
+            {% for category, message in messages %}
+              <li class="{{ category }}">{{ message }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+
+      <div class="content-wrapper">
+        <div class="prompt-section">
+          <form method="post" id="enhance-form">
+            <input type="hidden" name="action" value="enhance">
+            <label for="prompt">Character Description</label>
+            <textarea
+              id="prompt"
+              name="prompt"
+              placeholder="Enter a simple character description (e.g., 'A cool boy with multicolored hair', 'A cat with a long tail', 'A dragon with wings')..."
+              required
+            >{{ prompt }}</textarea>
+            <button type="submit">Enhance Prompt</button>
+          </form>
+          
+          {% if enhanced_prompt %}
+            <div class="enhanced-prompt-section">
+              <h3>Enhanced Prompt</h3>
+              <p class="info-text">
+                <small>Your description was enhanced using AI for animation-ready character generation. The prompt includes full body structure, clear appendages, and proper segmentation. You can edit it below before generating the image.</small>
+              </p>
+              <form method="post" id="generate-form">
+                <input type="hidden" name="action" value="generate">
+                <input type="hidden" name="prompt" value="{{ prompt }}">
+                {% if image_type %}
+                  <input type="hidden" name="image_type" value="{{ image_type }}">
+                {% endif %}
+                <textarea
+                  id="enhanced_prompt"
+                  name="enhanced_prompt"
+                  class="enhanced-prompt-textarea"
+                  placeholder="Enhanced prompt will appear here..."
+                  required
+                >{{ enhanced_prompt }}</textarea>
+                <button type="submit" class="generate-button">Generate Image</button>
+              </form>
+            </div>
+          {% endif %}
+
+          <div class="upload-section">
+            <h3>Upload Your Own Image</h3>
+            <p class="info-text">
+              <small>Already have a full-body character image? Upload it here to run segmentation and create a Spine skeleton without generating a new image.</small>
+            </p>
+            <form method="post" enctype="multipart/form-data">
+              <input type="hidden" name="action" value="upload">
+              <input type="hidden" name="prompt" value="{{ prompt|e }}">
+              <label for="uploaded_image">Character Image (PNG/JPG/WebP)</label>
+              <input
+                type="file"
+                id="uploaded_image"
+                name="uploaded_image"
+                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                required
+              />
+              <label for="upload_prompt">Description (optional)</label>
+              <textarea
+                id="upload_prompt"
+                name="upload_prompt"
+                placeholder="Briefly describe the uploaded character so we can save it alongside the file."
+              ></textarea>
+              <label for="upload_image_type">Character Type (optional)</label>
+              <select id="upload_image_type" name="upload_image_type">
+                <option value="">Select type...</option>
+                <option value="Humanlike Character" {% if image_type == "Humanlike Character" %}selected{% endif %}>
+                  Humanlike Character
+                </option>
+                <option value="Humanlike Character (Anthropomorphic Animal)" {% if image_type == "Humanlike Character (Anthropomorphic Animal)" %}selected{% endif %}>
+                  Anthropomorphic Character
+                </option>
+                <option value="Humanlike Character (Robot/Humanoid Robot)" {% if image_type == "Humanlike Character (Robot/Humanoid Robot)" %}selected{% endif %}>
+                  Robot / Humanoid Robot
+                </option>
+                <option value="Animal" {% if image_type == "Animal" %}selected{% endif %}>
+                  Animal
+                </option>
+              </select>
+              <button type="submit" class="generate-button">Upload Image</button>
+            </form>
+          </div>
+        </div>
+
+        {% if image_path %}
+          <section class="image-preview">
+            <h2>Generated Image</h2>
+            <img
+              src="{{ url_for('static', filename=image_path) }}"
+              alt="Generated from prompt"
+            />
+            {% if remote_url %}
+              <p>
+                Signed download link (expires soon):
+                <a href="{{ remote_url }}" target="_blank" rel="noopener"
+                  >Open original</a
+                >
+              </p>
+            {% endif %}
+
+            <form method="post" style="margin-top: 1rem;">
+              <input type="hidden" name="action" value="segment">
+              <input type="hidden" name="image_path" value="{{ image_path }}">
+              <button type="submit" class="generate-button">Segment Image</button>
+            </form>
+
+            {% if segmented_masks %}
+              <button 
+                id="create-spine-btn" 
+                class="generate-button" 
+                style="margin-top: 1rem;"
+                onclick="createSpineSkeleton()">
+                Create Spine Skeleton
+              </button>
+            {% endif %}
+
+            {% if segmented_masks %}
+              <div class="mask-gallery">
+                <h3>Segmented Parts</h3>
+                <div class="mask-grid">
+                  {% for mask_path in segmented_masks %}
+                    <figure>
+                      <a href="{{ url_for('static', filename=mask_path) }}" target="_blank" rel="noopener">
+                        <img
+                          src="{{ url_for('static', filename=mask_path) }}"
+                          alt="Segmented mask {{ loop.index }}"
+                        />
+                      </a>
+                    </figure>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+
+            {% if assembly_preview %}
+              <div class="assembly-preview">
+                <h3>Assembled Character Preview</h3>
+                <figure>
+                  <img
+                    src="{{ url_for('static', filename=assembly_preview) }}"
+                    alt="Assembled preview using segmented parts"
+                  />
+                </figure>
+                <p class="info-text" style="margin-top: 0.5rem;">
+                  <small>This visualization layers the segmented parts using their pivots so you can quickly verify alignment before building the Spine skeleton.</small>
+                </p>
+              </div>
+            {% endif %}
+
+            <!-- Spine Animation Viewer -->
+            <div id="spine-viewer-section" class="spine-viewer-container" style="display: none; margin-top: 2rem;">
+              <h3>Animation Preview</h3>
+              <div id="spine-loading" class="loading-indicator" style="display: none;">
+                Loading animation...
+              </div>
+              <canvas id="spine-canvas" width="800" height="600"></canvas>
+              <div id="spine-error" class="error-message" style="display: none;"></div>
+              
+              <div class="animation-controls">
+                <button onclick="playAnimation('idle')">Idle</button>
+                <button onclick="playAnimation('walk')">Walk</button>
+                <button onclick="playAnimation('jump')">Jump</button>
+                <button onclick="playAnimation('wave_r')">Wave Right</button>
+                <button onclick="playAnimation('wave_l')">Wave Left</button>
+              </div>
+
+              <div class="playback-controls">
+                <button onclick="stopAnimation()">Stop</button>
+                <div class="speed-control">
+                  <label>Speed:</label>
+                  <input type="range" id="speed-slider" min="0.1" max="2.0" step="0.1" value="1.0" onchange="setSpeed(this.value)">
+                  <span id="speed-value">1.0x</span>
+                </div>
+              </div>
+
+              <div class="current-animation" id="current-animation">
+                No animation playing
+              </div>
+
+              <button onclick="exportSpineProject()" style="margin-top: 1rem;" class="generate-button">
+                Export Spine Project (ZIP)
+              </button>
+            </div>
+          </section>
+        {% endif %}
+      </div>
+    </main>
+
+    <script src="{{ url_for('static', filename='js/spine_viewer.js', v='20251121') }}"></script>
+    <script>
+      let spineViewer = null;
+      let currentImageId = null;
+
+      async function createSpineSkeleton() {
+        const btn = document.getElementById('create-spine-btn');
+        btn.disabled = true;
+        btn.textContent = 'Creating Skeleton...';
+
+        try {
+          // Extract image ID from current image path (works with or without _no_bg)
+          const imagePath = "{{ image_path }}";
+          const match = imagePath.match(/([a-f0-9]{8})(?:_no_bg)?/);
+          if (!match) {
+            alert('Could not extract image ID from path: ' + imagePath);
+            btn.textContent = 'Create Spine Skeleton';
+            btn.disabled = false;
+            return;
+          }
+          
+          currentImageId = match[1];
+
+          const response = await fetch('/api/create-spine', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ image_id: currentImageId })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok || !data.success) {
+            alert('Error creating Spine skeleton: ' + (data.error || 'Unknown error'));
+            btn.textContent = 'Create Spine Skeleton';
+            btn.disabled = false;
+            return;
+          }
+
+          if (data.success) {
+            // Show spine viewer
+            const viewerSection = document.getElementById('spine-viewer-section');
+            const loadingIndicator = document.getElementById('spine-loading');
+            const errorDiv = document.getElementById('spine-error');
+            
+            if (viewerSection) {
+              viewerSection.style.display = 'flex';
+              viewerSection.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+            
+            // Show loading, hide error
+            if (loadingIndicator) loadingIndicator.style.display = 'block';
+            if (errorDiv) errorDiv.style.display = 'none';
+
+            try {
+              // Initialize viewer if not already done
+              if (!spineViewer) {
+                spineViewer = new SpineViewer('spine-canvas', 800, 600);
+                const initialized = await spineViewer.init();
+                if (!initialized) {
+                  throw new Error('Failed to initialize Spine viewer');
+                }
+              }
+
+              // Load character
+              console.log('Loading Spine character:', data.spine_json, data.spine_atlas);
+              const loaded = await spineViewer.loadSpineCharacter(
+                data.spine_json,
+                data.spine_atlas
+              ).catch((error) => {
+                console.error('Load error caught:', error);
+                throw error;
+              });
+
+              if (loadingIndicator) loadingIndicator.style.display = 'none';
+
+              if (loaded) {
+                // Try to play idle animation, but don't fail if it doesn't exist
+                const animations = spineViewer.getAvailableAnimations();
+                console.log('Available animations:', animations);
+                
+                if (animations.length > 0) {
+                  const animToPlay = animations.includes('idle') ? 'idle' : animations[0];
+                  spineViewer.playAnimation(animToPlay, true);
+                  updateCurrentAnimation(animToPlay);
+                }
+                
+                btn.textContent = 'Skeleton Created!';
+                setTimeout(() => {
+                  btn.textContent = 'Create Spine Skeleton';
+                  btn.disabled = false;
+                }, 2000);
+              } else {
+                throw new Error('Failed to load Spine character. Check browser console for details.');
+              }
+            } catch (error) {
+              console.error('Error loading Spine character:', error);
+              if (loadingIndicator) loadingIndicator.style.display = 'none';
+              if (errorDiv) {
+                errorDiv.textContent = `Error: ${error.message || 'Failed to load animation'}`;
+                errorDiv.style.display = 'block';
+              }
+              btn.textContent = 'Create Spine Skeleton';
+              btn.disabled = false;
+            }
+          } else {
+            alert('Error: ' + data.error);
+            btn.textContent = 'Create Spine Skeleton';
+            btn.disabled = false;
+          }
+        } catch (error) {
+          console.error('Error:', error);
+          alert('Failed to create skeleton: ' + error.message);
+          btn.textContent = 'Create Spine Skeleton';
+          btn.disabled = false;
+        }
+      }
+
+      function playAnimation(animName) {
+        if (!spineViewer || !spineViewer.isLoaded) {
+          alert('Please create skeleton first');
+          return;
+        }
+
+        spineViewer.playAnimation(animName, true);
+        updateCurrentAnimation(animName);
+      }
+
+      function stopAnimation() {
+        if (spineViewer) {
+          spineViewer.stopAnimation();
+          updateCurrentAnimation(null);
+        }
+      }
+
+      function setSpeed(speed) {
+        if (spineViewer) {
+          spineViewer.setSpeed(parseFloat(speed));
+          document.getElementById('speed-value').textContent = speed + 'x';
+        }
+      }
+
+      function updateCurrentAnimation(animName) {
+        const display = document.getElementById('current-animation');
+        if (animName) {
+          display.textContent = 'Playing: ' + animName;
+        } else {
+          display.textContent = 'No animation playing';
+        }
+      }
+
+      function exportSpineProject() {
+        if (!currentImageId) {
+          alert('No Spine project to export');
+          return;
+        }
+
+        window.location.href = `/export-spine/${currentImageId}`;
+      }
+    </script>
+  </body>
+</html>
+
