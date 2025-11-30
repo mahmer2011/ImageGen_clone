@@ -74,7 +74,7 @@ except Exception as e:
 BFL_API_KEY = os.environ.get("BFL_API_KEY")
 BFL_ENDPOINT = os.environ.get("BFL_ENDPOINT", "https://api.bfl.ai/v1/flux-kontext-pro")
 BFL_POLL_INTERVAL = float(os.environ.get("BFL_POLL_INTERVAL", "1.0"))
-BFL_POLL_TIMEOUT = float(os.environ.get("BFL_POLL_TIMEOUT", "60"))
+BFL_POLL_TIMEOUT = float(os.environ.get("BFL_POLL_TIMEOUT", "180"))  # Increased to 3 minutes for complex prompts
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
@@ -239,7 +239,7 @@ def index():
                         image_path = download_image(remote_url, final_prompt, enhanced_prompt if enhanced_prompt else None, image_type)
                         flash("Image generated successfully.", "success")
                     else:
-                        flash("Image generation timed out. Try again.")
+                        flash(f"Image generation timed out after {BFL_POLL_TIMEOUT} seconds. Complex prompts may take longer. Try again or simplify the prompt.", "warning")
                 except requests.HTTPError as http_error:
                     status_code = http_error.response.status_code if http_error.response else ""
                     detail = http_error.response.text if http_error.response else str(http_error)
@@ -387,6 +387,10 @@ def poll_for_result(polling_url: str, request_id: Optional[str]) -> Optional[str
         "accept": "application/json",
         "x-key": require_api_key(),
     }
+    
+    poll_count = 0
+    start_time = time.time()
+    status = None
 
     while time.time() < deadline:
         params = {"id": request_id} if request_id else None
@@ -395,6 +399,12 @@ def poll_for_result(polling_url: str, request_id: Optional[str]) -> Optional[str
         payload = response.json()
 
         status = payload.get("status")
+        poll_count += 1
+        elapsed = time.time() - start_time
+
+        # Log status every 10 polls or every 10 seconds
+        if poll_count % 10 == 0 or elapsed > 10:
+            print(f"Polling status: {status} (attempt {poll_count}, {elapsed:.1f}s elapsed)")
 
         if status == "Ready":
             result = payload.get("result", {})
@@ -408,9 +418,28 @@ def poll_for_result(polling_url: str, request_id: Optional[str]) -> Optional[str
         if status in {"Error", "Failed"}:
             error_detail = payload.get("error") or payload
             raise RuntimeError(f"Generation failed: {error_detail}")
+        
+        # Handle content moderation - this is a terminal state
+        if status == "Content Moderated":
+            error_detail = payload.get("error") or payload.get("message") or "Content moderation flagged this prompt"
+            raise RuntimeError(f"Content moderation blocked this prompt. The API flagged your request as potentially violating content policies. Please try rephrasing your prompt or removing any potentially problematic terms. Details: {error_detail}")
+        
+        # Handle other statuses that might indicate the API is still processing
+        if status in {"Processing", "Pending", "Queued", "InProgress"}:
+            # Continue polling
+            pass
+        elif status:
+            # Unknown status - log it but continue polling (but limit how long we poll for unknown statuses)
+            if poll_count > 20:  # After 20 polls of unknown status, treat as error
+                raise RuntimeError(f"Received unknown status '{status}' repeatedly. The API may be stuck. Please try again.")
+            if poll_count % 5 == 0:  # Only log every 5th poll to reduce spam
+                print(f"Unknown status '{status}' received (attempt {poll_count}), continuing to poll...")
 
         time.sleep(BFL_POLL_INTERVAL)
 
+    # Timeout reached
+    elapsed_total = time.time() - start_time
+    print(f"Polling timeout after {elapsed_total:.1f}s ({poll_count} attempts). Last status: {status}")
     return None
 
 
@@ -974,7 +1003,7 @@ def create_spine():
             assembly_width=assembly_width,
             assembly_height=assembly_height,
             part_metadata=part_metadata,
-            segmentation_metadata=segmentation_metadata,
+                segmentation_metadata=segmentation_metadata,
             character_name=image_id
         )
         
@@ -983,8 +1012,8 @@ def create_spine():
             spine_json = add_default_animations_to_skeleton(spine_json)
         
         # Save skeleton
-        with open(spine_json_path, "w", encoding="utf-8") as f:
-            json.dump(spine_json, f, indent=2)
+            with open(spine_json_path, "w", encoding="utf-8") as f:
+                json.dump(spine_json, f, indent=2)
         
         print(f"Spine skeleton saved to: {spine_json_path}")
         
