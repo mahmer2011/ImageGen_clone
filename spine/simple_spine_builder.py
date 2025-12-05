@@ -381,27 +381,29 @@ def create_simple_skeleton(
             print(f"WARNING: Could not find position for part '{part_name}', skipping")
             continue
         
-        # Calculate trimmed center (what's actually in the atlas)
-        # Get assembly origin if available
+        # Get pivot point from segmentation metadata (where part should rotate from)
+        pivot_point = None
         assembly_origin = None
         if segmentation_metadata:
             for part_entry in segmentation_metadata.get("parts", []):
                 if part_entry.get("name") == part_name:
+                    # Get pivot point (absolute coordinates in original image)
+                    pivot_data = part_entry.get("pivot")
+                    if pivot_data and isinstance(pivot_data, dict):
+                        pivot_abs = pivot_data.get("absolute")
+                        if pivot_abs and isinstance(pivot_abs, dict):
+                            pivot_point = {
+                                "x": float(pivot_abs.get("x", 0)),
+                                "y": float(pivot_abs.get("y", 0))
+                            }
+                    
+                    # Get assembly origin for trimmed part position
                     assembly_info = part_entry.get("assembly")
                     if assembly_info:
                         origin = assembly_info.get("origin")
                         if origin:
                             assembly_origin = (float(origin.get("x", 0)), float(origin.get("y", 0)))
-                        break
-        
-        if assembly_origin:
-            # Calculate trimmed center from origin
-            trimmed_center_x = assembly_origin[0] + trim_x + (width / 2.0)
-            trimmed_center_y = assembly_origin[1] + trim_y + (height / 2.0)
-        else:
-            # Use part center, adjust for trim
-            trimmed_center_x = part_pos["center_x"] - (width / 2.0) + trim_x + (width / 2.0)
-            trimmed_center_y = part_pos["center_y"] - (height / 2.0) + trim_y + (height / 2.0)
+                    break
         
         # Get bone position
         bone = next((b for b in bones if b["name"] == bone_name), None)
@@ -412,17 +414,34 @@ def create_simple_skeleton(
         # Calculate bone position in image space
         bone_img_x, bone_img_y = _bone_to_image_coords(bone, bones, assembly_width, assembly_height)
         
-        # Convert part center and bone position to Spine coordinates
-        part_center_spine_x, part_center_spine_y = image_to_spine_coords(
-            trimmed_center_x, trimmed_center_y, assembly_width, assembly_height
+        # Use pivot point if available, otherwise fall back to part center
+        if pivot_point:
+            # Pivot point is in original image coordinates
+            pivot_x = pivot_point["x"]
+            pivot_y = pivot_point["y"]
+        else:
+            # Fallback: use part center
+            if assembly_origin:
+                # Calculate trimmed center from origin
+                pivot_x = assembly_origin[0] + trim_x + (width / 2.0)
+                pivot_y = assembly_origin[1] + trim_y + (height / 2.0)
+            else:
+                # Use part center, adjust for trim
+                pivot_x = part_pos["center_x"] - (width / 2.0) + trim_x + (width / 2.0)
+                pivot_y = part_pos["center_y"] - (height / 2.0) + trim_y + (height / 2.0)
+        
+        # Convert pivot point and bone position to Spine coordinates
+        pivot_spine_x, pivot_spine_y = image_to_spine_coords(
+            pivot_x, pivot_y, assembly_width, assembly_height
         )
         bone_spine_x, bone_spine_y = image_to_spine_coords(
             bone_img_x, bone_img_y, assembly_width, assembly_height
         )
         
-        # Attachment offset = part center - bone position
-        attachment_x = round(part_center_spine_x - bone_spine_x, 2)
-        attachment_y = round(part_center_spine_y - bone_spine_y, 2)
+        # Attachment offset = pivot point - bone position
+        # This ensures the part rotates around the pivot (joint) point, not its center
+        attachment_x = round(pivot_spine_x - bone_spine_x, 2)
+        attachment_y = round(pivot_spine_y - bone_spine_y, 2)
         
         # Create slot (slot name = part name)
         slots.append({
