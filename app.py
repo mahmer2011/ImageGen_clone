@@ -13,6 +13,17 @@ from openai import OpenAI
 from PIL import Image, ImageOps
 from werkzeug.datastructures import FileStorage
 
+# --- NEW IMPORT ---
+# Import the generation logic from your new service
+from services.image_generator import (
+    submit_generation, 
+    poll_for_result, 
+    download_image,
+    BFL_POLL_TIMEOUT
+)
+# ... lazy imports for segmentation/spine ...
+
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -71,10 +82,6 @@ except Exception as e:
     CommandProcessor = None  # type: ignore[assignment]
     PromptAnalyzer = None  # type: ignore[assignment]
 
-BFL_API_KEY = os.environ.get("BFL_API_KEY")
-BFL_ENDPOINT = os.environ.get("BFL_ENDPOINT", "https://api.bfl.ai/v1/flux-kontext-pro")
-BFL_POLL_INTERVAL = float(os.environ.get("BFL_POLL_INTERVAL", "1.0"))
-BFL_POLL_TIMEOUT = float(os.environ.get("BFL_POLL_TIMEOUT", "180"))  # Increased to 3 minutes for complex prompts
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
@@ -223,30 +230,45 @@ def index():
 
             if not final_prompt:
                 flash("Please enter a prompt or enhance one before generating.")
-            elif not BFL_API_KEY:
+            # Note: We can check os.environ directly or rely on the service to throw an error
+            elif not os.environ.get("BFL_API_KEY"): 
                 flash("Set the BFL_API_KEY environment variable before generating images.")
             else:
                 try:
-                    # Generate new image
+                    # 1. Submit
                     submission = submit_generation(final_prompt)
                     polling_url = submission["polling_url"]
+                    
+                    # 2. Poll
+                    # Note: We pass the ID to help with debugging/logging in the service
                     remote_url = poll_for_result(polling_url, submission.get("id"))
 
                     if remote_url:
-                        # Get image type from form or classify if not present
+                        # 3. Download
+                        # Calculate output directory
+                        output_dir = os.path.join(app.root_path, "static", "generated_images")
+                        
+                        # Call the service function
+                        # It returns just the filename (e.g. "abc12345.png")
+                        filename = download_image(remote_url, output_dir, final_prompt)
+                        
+                        # Reconstruct the relative path for the template to display
+                        image_path = f"generated_images/{filename}"
+                        
+                        # Attempt to classify image type for the UI
                         if not image_type and enhanced_prompt:
                             image_type = classify_image_type(enhanced_prompt)
-                        image_path = download_image(remote_url, final_prompt, enhanced_prompt if enhanced_prompt else None, image_type)
+                            
                         flash("Image generated successfully.", "success")
                     else:
-                        flash(f"Image generation timed out after {BFL_POLL_TIMEOUT} seconds. Complex prompts may take longer. Try again or simplify the prompt.", "warning")
+                        flash(f"Image generation timed out after {BFL_POLL_TIMEOUT} seconds.", "warning")
+                        
                 except requests.HTTPError as http_error:
                     status_code = http_error.response.status_code if http_error.response else ""
                     detail = http_error.response.text if http_error.response else str(http_error)
                     flash(f"API request failed ({status_code}): {detail}")
                 except Exception as exc:
-                    flash(f"Unexpected error: {exc}")
-        
+                    flash(f"Unexpected error: {exc}")        
         elif action == "upload":
             upload_prompt = request.form.get("upload_prompt", "").strip()
             upload_image_type = request.form.get("upload_image_type", "").strip()
@@ -358,145 +380,6 @@ def index():
     )
 
 
-def submit_generation(prompt: str) -> dict:
-    payload = {
-        "prompt": prompt,
-        # Use a taller canvas by default so the full body (head to feet) fits comfortably.
-        # Can be overridden via BFL_ASPECT_RATIO if needed.
-        "aspect_ratio": os.environ.get("BFL_ASPECT_RATIO", "2:3"),
-    }
-    headers = {
-        "accept": "application/json",
-        "Content-Type": "application/json",
-        "x-key": require_api_key(),
-    }
-
-    response = requests.post(BFL_ENDPOINT, json=payload, headers=headers, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-
-    if "polling_url" not in data:
-        raise ValueError("API response missing polling_url.")
-
-    return data
-
-
-def poll_for_result(polling_url: str, request_id: Optional[str]) -> Optional[str]:
-    deadline = time.time() + BFL_POLL_TIMEOUT
-    headers = {
-        "accept": "application/json",
-        "x-key": require_api_key(),
-    }
-    
-    poll_count = 0
-    start_time = time.time()
-    status = None
-
-    while time.time() < deadline:
-        params = {"id": request_id} if request_id else None
-        response = requests.get(polling_url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        payload = response.json()
-
-        status = payload.get("status")
-        poll_count += 1
-        elapsed = time.time() - start_time
-
-        # Log status every 10 polls or every 10 seconds
-        if poll_count % 10 == 0 or elapsed > 10:
-            print(f"Polling status: {status} (attempt {poll_count}, {elapsed:.1f}s elapsed)")
-
-        if status == "Ready":
-            result = payload.get("result", {})
-            sample = result.get("sample")
-
-            if isinstance(sample, list):
-                return sample[0] if sample else None
-
-            return sample
-
-        if status in {"Error", "Failed"}:
-            error_detail = payload.get("error") or payload
-            raise RuntimeError(f"Generation failed: {error_detail}")
-        
-        # Handle content moderation - this is a terminal state
-        if status == "Content Moderated":
-            error_detail = payload.get("error") or payload.get("message") or "Content moderation flagged this prompt"
-            raise RuntimeError(f"Content moderation blocked this prompt. The API flagged your request as potentially violating content policies. Please try rephrasing your prompt or removing any potentially problematic terms. Details: {error_detail}")
-        
-        # Handle other statuses that might indicate the API is still processing
-        if status in {"Processing", "Pending", "Queued", "InProgress"}:
-            # Continue polling
-            pass
-        elif status:
-            # Unknown status - log it but continue polling (but limit how long we poll for unknown statuses)
-            if poll_count > 20:  # After 20 polls of unknown status, treat as error
-                raise RuntimeError(f"Received unknown status '{status}' repeatedly. The API may be stuck. Please try again.")
-            if poll_count % 5 == 0:  # Only log every 5th poll to reduce spam
-                print(f"Unknown status '{status}' received (attempt {poll_count}), continuing to poll...")
-
-        time.sleep(BFL_POLL_INTERVAL)
-
-    # Timeout reached
-    elapsed_total = time.time() - start_time
-    print(f"Polling timeout after {elapsed_total:.1f}s ({poll_count} attempts). Last status: {status}")
-    return None
-
-
-def download_image(image_url: str, prompt: str, enhanced_prompt: Optional[str] = None, image_type: Optional[str] = None) -> str:
-    """
-    Download image and save it with a unique filename.
-    Also saves a metadata file with the prompt for reference.
-    """
-    print(f"DEBUG: Downloading image from: {image_url}")
-    
-    response = requests.get(image_url, stream=True, timeout=30)
-    response.raise_for_status()
-
-    content_type = response.headers.get("Content-Type", "image/png")
-    extension = determine_extension(content_type)
-    
-    print(f"DEBUG: Content-Type: {content_type}, Extension: {extension}")
-
-    # Generate unique filename
-    unique_id = uuid.uuid4().hex[:8]  # Short unique ID to avoid collisions
-    filename = f"{unique_id}{extension}"
-    output_dir = os.path.join(app.root_path, "static", "generated_images")
-    os.makedirs(output_dir, exist_ok=True)
-
-    file_path = os.path.join(output_dir, filename)
-    
-    print(f"DEBUG: Saving image to: {file_path}")
-
-    # Save the image
-    bytes_written = 0
-    with open(file_path, "wb") as file_handle:
-        for chunk in response.iter_content(chunk_size=8192):
-            file_handle.write(chunk)
-            bytes_written += len(chunk)
-    
-    print(f"DEBUG: Image saved successfully! Size: {bytes_written/1024:.1f} KB")
-    
-    # Verify file exists
-    if os.path.exists(file_path):
-        file_size = os.path.getsize(file_path)
-        print(f"DEBUG: Verified file exists, size: {file_size/1024:.1f} KB")
-    else:
-        print(f"ERROR: File was not saved properly!")
-
-    # Save metadata file with prompt for reference
-    metadata_filename = f"{unique_id}.txt"
-    metadata_path = os.path.join(output_dir, metadata_filename)
-    with open(metadata_path, "w", encoding="utf-8") as meta_file:
-        meta_file.write(f"Prompt: {prompt}\n")
-        if enhanced_prompt:
-            meta_file.write(f"Enhanced Prompt: {enhanced_prompt}\n")
-        if image_type:
-            meta_file.write(f"Image Type: {image_type}\n")
-
-    relative_path = os.path.join("generated_images", filename)
-    print(f"DEBUG: Returning relative path: {relative_path}")
-    return relative_path.replace(os.sep, "/")
 
 
 def save_uploaded_image(
@@ -547,17 +430,6 @@ def save_uploaded_image(
     relative_path = os.path.join("generated_images", filename)
     return relative_path.replace(os.sep, "/")
 
-
-def determine_extension(content_type: str) -> str:
-    if "jpeg" in content_type or "jpg" in content_type:
-        return ".jpg"
-    if "webp" in content_type:
-        return ".webp"
-    if "gif" in content_type:
-        return ".gif"
-    if "png" in content_type:
-        return ".png"
-    return ".png"
 
 
 def read_image_metadata(image_path: str) -> dict:
@@ -622,11 +494,6 @@ def read_image_metadata(image_path: str) -> dict:
     
     return metadata
 
-
-def require_api_key() -> str:
-    if not BFL_API_KEY:
-        raise RuntimeError("BFL_API_KEY environment variable is not set.")
-    return BFL_API_KEY
 
 
 def is_human_like_character(description: str) -> bool:
@@ -1087,6 +954,18 @@ def export_spine_project(image_id):
 def chat_interface():
     """Render the chat interface."""
     return render_template("chat.html")
+
+@app.route("/api/job_status/<job_id>", methods=["GET"])
+def get_job_status(job_id):
+    """
+    Endpoint for the chat frontend to poll.
+    Retrieves status from the CommandProcessor's job store.
+    """
+    if chat_handler and chat_handler.processor:
+        status = chat_handler.processor.get_job_status(job_id)
+        return jsonify(status)
+    
+    return jsonify({"status": "error", "message": "Chat system not initialized"}), 500
 
 
 @app.route("/chat/message", methods=["POST"])

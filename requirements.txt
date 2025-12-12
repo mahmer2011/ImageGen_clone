@@ -16,3 +16,10 @@ mediapipe>=0.10.0
 
 # Spine export & animation
 scipy>=1.11.0
+
+# Deep learning / SAM
+# Note: mobile-sam must be installed from GitHub, not PyPI
+# Install with: pip install git+https://github.com/ChaoningZhang/MobileSAM.git
+torch>=2.0.0
+torchvision>=0.15.0
+timm>=0.9.0

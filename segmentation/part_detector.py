@@ -1,1004 +1,3 @@
-# # """
-# # Body Part Detector Module
-# # Detects and identifies different body parts from character images.
-# # """
-
-# # import cv2
-# # import numpy as np
-# # from typing import Dict, List, Tuple, Optional
-# # from dataclasses import dataclass
-
-
-# # @dataclass
-# # class BodyPart:
-# #     """Represents a detected body part."""
-# #     name: str
-# #     bbox: Tuple[int, int, int, int]  # x, y, w, h
-# #     contour: np.ndarray
-# #     center: Tuple[int, int]
-# #     area: float
-# #     mask: np.ndarray
-
-
-# # class BodyPartDetector:
-# #     """
-# #     Detects and identifies body parts from character images.
-# #     Uses multiple strategies: contour analysis, region division, and spatial relationships.
-# #     """
-    
-# #     def __init__(self, image: np.ndarray):
-# #         """
-# #         Initialize detector with an image.
-        
-# #         Args:
-# #             image: Input image (BGRA format with transparency)
-# #         """
-# #         self.image = image
-# #         self.height, self.width = image.shape[:2]
-# #         self.parts: List[BodyPart] = []
-        
-# #         # Body proportions (typical humanoid/animal ratios)
-# #         self.PROPORTIONS = {
-# #             'head_ratio': 0.20,      # Head is ~20% of total height
-# #             'torso_ratio': 0.35,     # Torso is ~35% of total height
-# #             'legs_ratio': 0.45,      # Legs are ~45% of total height
-# #             'arm_width_ratio': 0.15, # Arms are ~15% of body width each
-# #         }
-    
-# #     def detect_all_parts(self) -> Dict[str, BodyPart]:
-# #         """
-# #         Main detection method - detects all body parts.
-        
-# #         Returns:
-# #             Dictionary of {part_name: BodyPart}
-# #         """
-# #         # Step 1: Get character bounding box
-# #         char_bbox = self._get_character_bbox()
-# #         if char_bbox is None:
-# #             return {}
-        
-# #         # Step 2: Detect contours
-# #         contours = self._find_contours()
-        
-# #         # Step 3: Apply multiple detection strategies
-# #         detected_parts = {}
-        
-# #         # Strategy 1: Region-based detection (for simple characters)
-# #         region_parts = self._detect_by_regions(char_bbox)
-# #         detected_parts.update(region_parts)
-        
-# #         # Strategy 2: Contour-based detection (for complex characters)
-# #         if len(contours) > 1:
-# #             contour_parts = self._detect_by_contours(contours, char_bbox)
-# #             # Merge with region-based (contour-based overrides if better)
-# #             for name, part in contour_parts.items():
-# #                 if name not in detected_parts or part.area > detected_parts[name].area * 0.5:
-# #                     detected_parts[name] = part
-        
-# #         # Strategy 3: Spatial relationship refinement
-# #         detected_parts = self._refine_by_spatial_relationships(detected_parts, char_bbox)
-        
-# #         return detected_parts
-    
-# #     def _get_character_bbox(self) -> Optional[Tuple[int, int, int, int]]:
-# #         """Get the bounding box of the entire character."""
-# #         if self.image.shape[2] == 4:  # Has alpha channel
-# #             alpha = self.image[:, :, 3]
-# #         else:
-# #             gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-# #             _, alpha = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-        
-# #         # Find non-zero pixels
-# #         coords = cv2.findNonZero(alpha)
-# #         if coords is None:
-# #             return None
-        
-# #         x, y, w, h = cv2.boundingRect(coords)
-# #         return (x, y, w, h)
-    
-# #     def _find_contours(self) -> List[np.ndarray]:
-# #         """Find all contours in the image."""
-# #         if self.image.shape[2] == 4:
-# #             alpha = self.image[:, :, 3]
-# #         else:
-# #             gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-# #             _, alpha = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-        
-# #         # Clean up with morphological operations
-# #         kernel = np.ones((3, 3), np.uint8)
-# #         alpha = cv2.morphologyEx(alpha, cv2.MORPH_CLOSE, kernel)
-# #         alpha = cv2.morphologyEx(alpha, cv2.MORPH_OPEN, kernel)
-        
-# #         # Find contours
-# #         contours, _ = cv2.findContours(alpha, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-# #         # Filter small contours (noise)
-# #         min_area = (self.width * self.height) * 0.001  # 0.1% of image
-# #         contours = [c for c in contours if cv2.contourArea(c) > min_area]
-        
-# #         # Sort by area (largest first)
-# #         contours = sorted(contours, key=cv2.contourArea, reverse=True)
-        
-# #         return contours
-    
-# #     def _detect_by_regions(self, char_bbox: Tuple[int, int, int, int]) -> Dict[str, BodyPart]:
-# #         """
-# #         Detect body parts by dividing the character into regions.
-# #         Works well for T-pose or neutral stance characters.
-# #         """
-# #         x, y, w, h = char_bbox
-# #         parts = {}
-        
-# #         # Calculate region boundaries based on proportions
-# #         head_h = int(h * self.PROPORTIONS['head_ratio'])
-# #         torso_h = int(h * self.PROPORTIONS['torso_ratio'])
-# #         legs_h = h - head_h - torso_h
-        
-# #         # Define regions
-# #         regions = {
-# #             'head': (x, y, w, head_h),
-# #             'body': (x + int(w * 0.2), y + head_h, int(w * 0.6), torso_h),
-# #             'left_arm': (x, y + head_h, int(w * 0.3), torso_h),
-# #             'right_arm': (x + int(w * 0.7), y + head_h, int(w * 0.3), torso_h),
-# #             'legs_combined': (x, y + head_h + torso_h, w, legs_h),
-# #         }
-        
-# #         # Extract each region
-# #         for part_name, (rx, ry, rw, rh) in regions.items():
-# #             # Ensure bounds are valid
-# #             rx = max(0, min(rx, self.width - 1))
-# #             ry = max(0, min(ry, self.height - 1))
-# #             rw = min(rw, self.width - rx)
-# #             rh = min(rh, self.height - ry)
-            
-# #             if rw <= 0 or rh <= 0:
-# #                 continue
-            
-# #             # Extract region mask
-# #             if self.image.shape[2] == 4:
-# #                 region_alpha = self.image[ry:ry+rh, rx:rx+rw, 3]
-# #             else:
-# #                 region_gray = cv2.cvtColor(self.image[ry:ry+rh, rx:rx+rw], cv2.COLOR_BGR2GRAY)
-# #                 _, region_alpha = cv2.threshold(region_gray, 10, 255, cv2.THRESH_BINARY)
-            
-# #             # Check if region has significant content
-# #             if np.sum(region_alpha > 0) < (rw * rh * 0.05):  # At least 5% filled
-# #                 continue
-            
-# #             # Create full-size mask
-# #             full_mask = np.zeros((self.height, self.width), dtype=np.uint8)
-# #             full_mask[ry:ry+rh, rx:rx+rw] = region_alpha
-            
-# #             # Find contour for this region
-# #             contours, _ = cv2.findContours(region_alpha, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-# #             if not contours:
-# #                 continue
-            
-# #             main_contour = max(contours, key=cv2.contourArea)
-# #             # Adjust contour coordinates to full image
-# #             main_contour = main_contour + np.array([rx, ry])
-            
-# #             # Calculate center
-# #             M = cv2.moments(main_contour)
-# #             if M["m00"] != 0:
-# #                 cx = int(M["m10"] / M["m00"])
-# #                 cy = int(M["m01"] / M["m00"])
-# #             else:
-# #                 cx, cy = rx + rw // 2, ry + rh // 2
-            
-# #             part = BodyPart(
-# #                 name=part_name,
-# #                 bbox=(rx, ry, rw, rh),
-# #                 contour=main_contour,
-# #                 center=(cx, cy),
-# #                 area=cv2.contourArea(main_contour),
-# #                 mask=full_mask
-# #             )
-            
-# #             parts[part_name] = part
-        
-# #         # Try to split legs if combined
-# #         if 'legs_combined' in parts:
-# #             left_leg, right_leg = self._split_legs(parts['legs_combined'])
-# #             if left_leg and right_leg:
-# #                 parts['left_leg'] = left_leg
-# #                 parts['right_leg'] = right_leg
-# #                 del parts['legs_combined']
-        
-# #         return parts
-    
-# #     def _detect_by_contours(self, contours: List[np.ndarray], 
-# #                            char_bbox: Tuple[int, int, int, int]) -> Dict[str, BodyPart]:
-# #         """
-# #         Detect body parts by analyzing individual contours.
-# #         Works well for characters with clear separation between parts.
-# #         """
-# #         x, y, w, h = char_bbox
-# #         parts = {}
-        
-# #         # Analyze each contour
-# #         for contour in contours[:10]:  # Limit to top 10 largest
-# #             # Get contour properties
-# #             area = cv2.contourArea(contour)
-# #             bbox = cv2.boundingRect(contour)
-# #             cx_local, cy_local, cw, ch = bbox
-            
-# #             # Calculate center
-# #             M = cv2.moments(contour)
-# #             if M["m00"] != 0:
-# #                 cx = int(M["m10"] / M["m00"])
-# #                 cy = int(M["m01"] / M["m00"])
-# #             else:
-# #                 cx, cy = cx_local + cw // 2, cy_local + ch // 2
-            
-# #             # Classify based on position and size
-# #             part_name = self._classify_contour(bbox, area, char_bbox)
-            
-# #             if part_name:
-# #                 # Create mask for this contour
-# #                 mask = np.zeros((self.height, self.width), dtype=np.uint8)
-# #                 cv2.drawContours(mask, [contour], -1, 255, -1)
-                
-# #                 part = BodyPart(
-# #                     name=part_name,
-# #                     bbox=bbox,
-# #                     contour=contour,
-# #                     center=(cx, cy),
-# #                     area=area,
-# #                     mask=mask
-# #                 )
-                
-# #                 # Keep largest if duplicate names
-# #                 if part_name not in parts or area > parts[part_name].area:
-# #                     parts[part_name] = part
-        
-# #         return parts
-    
-# #     def _classify_contour(self, bbox: Tuple[int, int, int, int], area: float,
-# #                          char_bbox: Tuple[int, int, int, int]) -> Optional[str]:
-# #         """
-# #         Classify a contour as a specific body part based on its properties.
-# #         """
-# #         cx, cy, cw, ch = bbox
-# #         char_x, char_y, char_w, char_h = char_bbox
-        
-# #         # Calculate relative position (0-1 range)
-# #         rel_x = (cx - char_x) / char_w if char_w > 0 else 0
-# #         rel_y = (cy - char_y) / char_h if char_h > 0 else 0
-        
-# #         # Calculate aspect ratio
-# #         aspect = ch / cw if cw > 0 else 1
-        
-# #         # Calculate relative size
-# #         rel_area = area / (char_w * char_h) if (char_w * char_h) > 0 else 0
-        
-# #         # Classification rules
-        
-# #         # Head: top region, roughly square, medium size
-# #         if rel_y < 0.25 and 0.8 < aspect < 1.5 and 0.05 < rel_area < 0.3:
-# #             return 'head'
-        
-# #         # Body: center region, larger area
-# #         if 0.2 < rel_y < 0.6 and 0.3 < rel_x < 0.7 and rel_area > 0.15:
-# #             return 'body'
-        
-# #         # Left arm: left side, upper-middle region
-# #         if rel_x < 0.35 and 0.25 < rel_y < 0.65 and aspect > 1.2:
-# #             return 'left_arm'
-        
-# #         # Right arm: right side, upper-middle region
-# #         if rel_x > 0.65 and 0.25 < rel_y < 0.65 and aspect > 1.2:
-# #             return 'right_arm'
-        
-# #         # Left leg: left side, lower region
-# #         if rel_x < 0.5 and rel_y > 0.55 and aspect > 1.5:
-# #             return 'left_leg'
-        
-# #         # Right leg: right side, lower region
-# #         if rel_x >= 0.5 and rel_y > 0.55 and aspect > 1.5:
-# #             return 'right_leg'
-        
-# #         return None
-    
-# #     def _split_legs(self, legs_part: BodyPart) -> Tuple[Optional[BodyPart], Optional[BodyPart]]:
-# #         """Try to split combined legs into left and right."""
-# #         x, y, w, h = legs_part.bbox
-        
-# #         # Split vertically down the middle
-# #         mid_x = x + w // 2
-        
-# #         # Create masks for left and right
-# #         left_mask = legs_part.mask.copy()
-# #         left_mask[:, mid_x:] = 0
-        
-# #         right_mask = legs_part.mask.copy()
-# #         right_mask[:, :mid_x] = 0
-        
-# #         # Find contours in each half
-# #         left_contours, _ = cv2.findContours(left_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-# #         right_contours, _ = cv2.findContours(right_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-# #         left_leg = None
-# #         right_leg = None
-        
-# #         if left_contours:
-# #             contour = max(left_contours, key=cv2.contourArea)
-# #             bbox = cv2.boundingRect(contour)
-# #             M = cv2.moments(contour)
-# #             cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else bbox[0] + bbox[2] // 2
-# #             cy = int(M["m01"] / M["m00"]) if M["m00"] != 0 else bbox[1] + bbox[3] // 2
-            
-# #             left_leg = BodyPart(
-# #                 name='left_leg',
-# #                 bbox=bbox,
-# #                 contour=contour,
-# #                 center=(cx, cy),
-# #                 area=cv2.contourArea(contour),
-# #                 mask=left_mask
-# #             )
-        
-# #         if right_contours:
-# #             contour = max(right_contours, key=cv2.contourArea)
-# #             bbox = cv2.boundingRect(contour)
-# #             M = cv2.moments(contour)
-# #             cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else bbox[0] + bbox[2] // 2
-# #             cy = int(M["m01"] / M["m00"]) if M["m00"] != 0 else bbox[1] + bbox[3] // 2
-            
-# #             right_leg = BodyPart(
-# #                 name='right_leg',
-# #                 bbox=bbox,
-# #                 contour=contour,
-# #                 center=(cx, cy),
-# #                 area=cv2.contourArea(contour),
-# #                 mask=right_mask
-# #             )
-        
-# #         return left_leg, right_leg
-    
-# #     def _refine_by_spatial_relationships(self, parts: Dict[str, BodyPart],
-# #                                         char_bbox: Tuple[int, int, int, int]) -> Dict[str, BodyPart]:
-# #         """
-# #         Refine detected parts based on spatial relationships.
-# #         Ensures logical hierarchy (e.g., head above body).
-# #         """
-# #         if 'body' not in parts:
-# #             return parts
-        
-# #         body = parts['body']
-# #         body_center_y = body.center[1]
-        
-# #         # Head should be above body
-# #         if 'head' in parts:
-# #             head = parts['head']
-# #             if head.center[1] > body_center_y:
-# #                 # Head is below body - probably wrong, remove it
-# #                 print("Warning: Head detected below body, removing head detection")
-# #                 del parts['head']
-        
-# #         # Arms should be at body level (vertically)
-# #         for arm_name in ['left_arm', 'right_arm']:
-# #             if arm_name in parts:
-# #                 arm = parts[arm_name]
-# #                 # Arms should be roughly at body height
-# #                 if abs(arm.center[1] - body_center_y) > char_bbox[3] * 0.3:
-# #                     print(f"Warning: {arm_name} too far from body vertically")
-        
-# #         # Legs should be below body
-# #         for leg_name in ['left_leg', 'right_leg']:
-# #             if leg_name in parts:
-# #                 leg = parts[leg_name]
-# #                 if leg.center[1] < body_center_y:
-# #                     print(f"Warning: {leg_name} detected above body")
-        
-# #         return parts
-    
-# #     def visualize_detections(self, parts: Dict[str, BodyPart]) -> np.ndarray:
-# #         """
-# #         Create visualization of detected parts.
-# #         Useful for debugging.
-# #         """
-# #         vis = self.image.copy()
-        
-# #         # Color map for different parts
-# #         colors = {
-# #             'head': (0, 255, 255),      # Yellow
-# #             'body': (255, 0, 0),        # Blue
-# #             'left_arm': (0, 255, 0),    # Green
-# #             'right_arm': (0, 255, 0),   # Green
-# #             'left_leg': (255, 0, 255),  # Magenta
-# #             'right_leg': (255, 0, 255), # Magenta
-# #         }
-        
-# #         for name, part in parts.items():
-# #             color = colors.get(name, (128, 128, 128))
-            
-# #             # Draw bounding box
-# #             x, y, w, h = part.bbox
-# #             cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
-            
-# #             # Draw center point
-# #             cv2.circle(vis, part.center, 5, color, -1)
-            
-# #             # Draw label
-# #             cv2.putText(vis, name, (x, y - 10), 
-# #                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-# #         return vis
-
-
-
-
-# """
-# Body Part Detector Module with MediaPipe Pose Detection
-# Uses pose estimation to accurately detect and segment body parts.
-# IMPROVED VERSION with proper part separation
-# """
-
-# import cv2
-# import numpy as np
-# import mediapipe as mp
-# from typing import Dict, List, Tuple, Optional
-# from dataclasses import dataclass
-
-
-# @dataclass
-# class BodyPart:
-#     """Represents a detected body part."""
-#     name: str
-#     bbox: Tuple[int, int, int, int]  # x, y, w, h
-#     contour: np.ndarray
-#     center: Tuple[int, int]
-#     area: float
-#     mask: np.ndarray
-#     keypoints: Optional[Dict[str, Tuple[int, int]]] = None
-
-
-# class BodyPartDetector:
-#     """
-#     Detects and identifies body parts using MediaPipe Pose estimation.
-#     Improved version with better part separation.
-#     """
-    
-#     def __init__(self, image: np.ndarray):
-#         self.image = image
-#         self.height, self.width = image.shape[:2]
-#         self.parts: Dict[str, BodyPart] = {}
-#         self.pose_landmarks = None
-#         self.keypoints_pixel = {}
-        
-#         # Initialize MediaPipe Pose
-#         self.mp_pose = mp.solutions.pose
-#         self.mp_drawing = mp.solutions.drawing_utils
-#         self.pose = self.mp_pose.Pose(
-#             static_image_mode=True,
-#             model_complexity=2,
-#             enable_segmentation=True,
-#             min_detection_confidence=0.3  # Lower threshold for better detection
-#         )
-        
-#         # MediaPipe landmark indices
-#         self.LANDMARK_NAMES = {
-#             0: 'nose',
-#             1: 'left_eye_inner', 2: 'left_eye', 3: 'left_eye_outer',
-#             4: 'right_eye_inner', 5: 'right_eye', 6: 'right_eye_outer',
-#             7: 'left_ear', 8: 'right_ear',
-#             9: 'mouth_left', 10: 'mouth_right',
-#             11: 'left_shoulder', 12: 'right_shoulder',
-#             13: 'left_elbow', 14: 'right_elbow',
-#             15: 'left_wrist', 16: 'right_wrist',
-#             17: 'left_pinky', 18: 'right_pinky',
-#             19: 'left_index', 20: 'right_index',
-#             21: 'left_thumb', 22: 'right_thumb',
-#             23: 'left_hip', 24: 'right_hip',
-#             25: 'left_knee', 26: 'right_knee',
-#             27: 'left_ankle', 28: 'right_ankle',
-#             29: 'left_heel', 30: 'right_heel',
-#             31: 'left_foot_index', 32: 'right_foot_index'
-#         }
-    
-#     def detect_all_parts(self) -> Dict[str, BodyPart]:
-#         """Main detection method using MediaPipe Pose."""
-#         print("Detecting pose landmarks with MediaPipe...")
-        
-#         # Convert to RGB for MediaPipe
-#         if self.image.shape[2] == 4:
-#             rgb_image = cv2.cvtColor(self.image[:, :, :3], cv2.COLOR_BGR2RGB)
-#         else:
-#             rgb_image = cv2.cvtColor(self.image, cv2.COLOR_BGR2RGB)
-        
-#         # Process with MediaPipe
-#         results = self.pose.process(rgb_image)
-        
-#         if not results.pose_landmarks:
-#             print("⚠️ No pose landmarks detected! Falling back to contour-based detection...")
-#             return self._fallback_contour_detection()
-        
-#         self.pose_landmarks = results.pose_landmarks
-#         print(f"✓ Detected {len(results.pose_landmarks.landmark)} pose landmarks")
-        
-#         # Extract keypoints
-#         self.keypoints_pixel = self._extract_keypoints(results.pose_landmarks)
-#         print(f"✓ Extracted {len(self.keypoints_pixel)} valid keypoints")
-        
-#         if len(self.keypoints_pixel) < 10:
-#             print("⚠️ Too few keypoints detected, using fallback...")
-#             return self._fallback_contour_detection()
-        
-#         # Get alpha mask
-#         alpha_mask = self._get_alpha_mask()
-        
-#         # Detect parts with improved segmentation
-#         detected_parts = {}
-        
-#         # 1. Head (ears, eyes, nose, mouth)
-#         head = self._segment_head(alpha_mask)
-#         if head:
-#             detected_parts['head'] = head
-#             print(f"  ✓ Head segmented")
-        
-#         # 2. Body/Torso (between shoulders and hips)
-#         body = self._segment_body(alpha_mask)
-#         if body:
-#             detected_parts['body'] = body
-#             print(f"  ✓ Body segmented")
-        
-#         # 3. Left Arm (shoulder to hand)
-#         left_arm = self._segment_arm(alpha_mask, 'left')
-#         if left_arm:
-#             detected_parts['left_arm'] = left_arm
-#             print(f"  ✓ Left arm segmented")
-        
-#         # 4. Right Arm (shoulder to hand)
-#         right_arm = self._segment_arm(alpha_mask, 'right')
-#         if right_arm:
-#             detected_parts['right_arm'] = right_arm
-#             print(f"  ✓ Right arm segmented")
-        
-#         # 5. Left Leg (hip to foot)
-#         left_leg = self._segment_leg(alpha_mask, 'left')
-#         if left_leg:
-#             detected_parts['left_leg'] = left_leg
-#             print(f"  ✓ Left leg segmented")
-        
-#         # 6. Right Leg (hip to foot)
-#         right_leg = self._segment_leg(alpha_mask, 'right')
-#         if right_leg:
-#             detected_parts['right_leg'] = right_leg
-#             print(f"  ✓ Right leg segmented")
-        
-#         print(f"✓ Total parts segmented: {len(detected_parts)}")
-        
-#         return detected_parts
-    
-#     def _extract_keypoints(self, landmarks) -> Dict[str, Tuple[int, int]]:
-#         """Extract keypoints as pixel coordinates."""
-#         keypoints = {}
-        
-#         for idx, landmark in enumerate(landmarks.landmark):
-#             # Lower visibility threshold for better detection
-#             if landmark.visibility < 0.3:
-#                 continue
-            
-#             x = int(landmark.x * self.width)
-#             y = int(landmark.y * self.height)
-            
-#             x = max(0, min(x, self.width - 1))
-#             y = max(0, min(y, self.height - 1))
-            
-#             name = self.LANDMARK_NAMES.get(idx, f'landmark_{idx}')
-#             keypoints[name] = (x, y)
-        
-#         return keypoints
-    
-#     def _get_alpha_mask(self) -> np.ndarray:
-#         """Get alpha channel as binary mask."""
-#         if self.image.shape[2] == 4:
-#             return self.image[:, :, 3]
-#         else:
-#             gray = cv2.cvtColor(self.image, cv2.COLOR_BGR2GRAY)
-#             _, mask = cv2.threshold(gray, 10, 255, cv2.THRESH_BINARY)
-#             return mask
-    
-#     def _create_polygon_mask(self, points: List[Tuple[int, int]], 
-#                             alpha_mask: np.ndarray) -> np.ndarray:
-#         """Create a polygon mask from points and intersect with alpha."""
-#         mask = np.zeros((self.height, self.width), dtype=np.uint8)
-        
-#         if len(points) < 3:
-#             return mask
-        
-#         # Create polygon
-#         points_array = np.array(points, dtype=np.int32)
-#         cv2.fillPoly(mask, [points_array], 255)
-        
-#         # Intersect with alpha mask (only keep visible pixels)
-#         mask = cv2.bitwise_and(mask, alpha_mask)
-        
-#         # Dilate slightly to include edges
-#         kernel = np.ones((3, 3), np.uint8)
-#         mask = cv2.dilate(mask, kernel, iterations=1)
-        
-#         return mask
-    
-#     def _segment_head(self, alpha_mask: np.ndarray) -> Optional[BodyPart]:
-#         """Segment head using facial landmarks."""
-#         kp = self.keypoints_pixel
-        
-#         # Required keypoints for head
-#         required = ['nose']
-#         if not all(k in kp for k in required):
-#             return None
-        
-#         # Build head polygon
-#         head_points = []
-        
-#         # Top of head (estimate above eyes/ears)
-#         if 'left_ear' in kp and 'right_ear' in kp:
-#             left_ear = kp['left_ear']
-#             right_ear = kp['right_ear']
-#             mid_x = (left_ear[0] + right_ear[0]) // 2
-#             top_y = min(left_ear[1], right_ear[1]) - 50  # Above ears
-#             head_points.append((mid_x, top_y))
-#             head_points.append((left_ear[0] - 20, left_ear[1]))
-#         elif 'left_eye' in kp:
-#             eye = kp['left_eye']
-#             head_points.append((eye[0], eye[1] - 60))
-        
-#         # Left side
-#         if 'left_ear' in kp:
-#             head_points.append(kp['left_ear'])
-#         if 'mouth_left' in kp:
-#             head_points.append(kp['mouth_left'])
-        
-#         # Bottom (chin/neck area)
-#         if 'left_shoulder' in kp and 'right_shoulder' in kp:
-#             ls = kp['left_shoulder']
-#             rs = kp['right_shoulder']
-#             neck_x = (ls[0] + rs[0]) // 2
-#             neck_y = min(ls[1], rs[1]) - 10
-#             head_points.append((neck_x - 30, neck_y))
-#             head_points.append((neck_x + 30, neck_y))
-        
-#         # Right side
-#         if 'mouth_right' in kp:
-#             head_points.append(kp['mouth_right'])
-#         if 'right_ear' in kp:
-#             head_points.append(kp['right_ear'])
-#             head_points.append((kp['right_ear'][0] + 20, kp['right_ear'][1]))
-        
-#         if len(head_points) < 3:
-#             return self._fallback_region_part('head', alpha_mask, 0, 0.25)
-        
-#         mask = self._create_polygon_mask(head_points, alpha_mask)
-#         return self._create_part_from_mask('head', mask, head_points)
-    
-#     def _segment_body(self, alpha_mask: np.ndarray) -> Optional[BodyPart]:
-#         """Segment torso/body between shoulders and hips."""
-#         kp = self.keypoints_pixel
-        
-#         required = ['left_shoulder', 'right_shoulder']
-#         if not all(k in kp for k in required):
-#             return None
-        
-#         # Body polygon: shoulders → hips
-#         body_points = []
-        
-#         # Top: shoulders
-#         if 'left_shoulder' in kp:
-#             ls = kp['left_shoulder']
-#             body_points.append((ls[0] - 15, ls[1]))
-#             body_points.append(ls)
-        
-#         if 'right_shoulder' in kp:
-#             rs = kp['right_shoulder']
-#             body_points.append(rs)
-#             body_points.append((rs[0] + 15, rs[1]))
-        
-#         # Bottom: hips
-#         if 'right_hip' in kp:
-#             rh = kp['right_hip']
-#             body_points.append((rh[0] + 20, rh[1]))
-#             body_points.append(rh)
-#         elif 'right_shoulder' in kp:
-#             rs = kp['right_shoulder']
-#             body_points.append((rs[0] + 15, rs[1] + 150))
-        
-#         if 'left_hip' in kp:
-#             lh = kp['left_hip']
-#             body_points.append(lh)
-#             body_points.append((lh[0] - 20, lh[1]))
-#         elif 'left_shoulder' in kp:
-#             ls = kp['left_shoulder']
-#             body_points.append((ls[0] - 15, ls[1] + 150))
-        
-#         if len(body_points) < 4:
-#             return self._fallback_region_part('body', alpha_mask, 0.25, 0.60)
-        
-#         mask = self._create_polygon_mask(body_points, alpha_mask)
-#         return self._create_part_from_mask('body', mask, body_points)
-    
-#     def _segment_arm(self, alpha_mask: np.ndarray, side: str) -> Optional[BodyPart]:
-#         """Segment arm (shoulder to wrist/hand)."""
-#         kp = self.keypoints_pixel
-#         prefix = side  # 'left' or 'right'
-        
-#         shoulder_key = f'{prefix}_shoulder'
-#         elbow_key = f'{prefix}_elbow'
-#         wrist_key = f'{prefix}_wrist'
-        
-#         if shoulder_key not in kp:
-#             return None
-        
-#         # Build arm polygon
-#         arm_points = []
-        
-#         # Start at shoulder
-#         shoulder = kp[shoulder_key]
-#         offset = 20 if side == 'left' else -20
-        
-#         # Shoulder area (wider)
-#         arm_points.append((shoulder[0] + offset, shoulder[1] - 10))
-#         arm_points.append((shoulder[0] + offset, shoulder[1] + 10))
-        
-#         # Along the arm
-#         if elbow_key in kp:
-#             elbow = kp[elbow_key]
-#             arm_points.append((elbow[0] + offset//2, elbow[1] + 10))
-            
-#             if wrist_key in kp:
-#                 wrist = kp[wrist_key]
-#                 arm_points.append((wrist[0], wrist[1] + 15))
-                
-#                 # Hand area
-#                 for finger in [f'{prefix}_pinky', f'{prefix}_index', f'{prefix}_thumb']:
-#                     if finger in kp:
-#                         arm_points.append(kp[finger])
-                
-#                 # Back up the arm
-#                 arm_points.append((wrist[0], wrist[1] - 15))
-            
-#             arm_points.append((elbow[0] - offset//2, elbow[1] - 10))
-        
-#         arm_points.append((shoulder[0] - offset, shoulder[1] + 10))
-#         arm_points.append((shoulder[0] - offset, shoulder[1] - 10))
-        
-#         if len(arm_points) < 4:
-#             return None
-        
-#         mask = self._create_polygon_mask(arm_points, alpha_mask)
-#         return self._create_part_from_mask(f'{side}_arm', mask, arm_points)
-    
-#     def _segment_leg(self, alpha_mask: np.ndarray, side: str) -> Optional[BodyPart]:
-#         """Segment leg (hip to foot)."""
-#         kp = self.keypoints_pixel
-#         prefix = side
-        
-#         hip_key = f'{prefix}_hip'
-#         knee_key = f'{prefix}_knee'
-#         ankle_key = f'{prefix}_ankle'
-        
-#         if hip_key not in kp:
-#             return None
-        
-#         leg_points = []
-        
-#         # Start at hip
-#         hip = kp[hip_key]
-#         offset = 25
-        
-#         leg_points.append((hip[0] - offset, hip[1]))
-#         leg_points.append((hip[0] + offset, hip[1]))
-        
-#         # Along the leg
-#         if knee_key in kp:
-#             knee = kp[knee_key]
-#             leg_points.append((knee[0] + offset//2, knee[1]))
-            
-#             if ankle_key in kp:
-#                 ankle = kp[ankle_key]
-#                 leg_points.append((ankle[0] + 10, ankle[1]))
-                
-#                 # Foot area
-#                 for foot_part in [f'{prefix}_heel', f'{prefix}_foot_index']:
-#                     if foot_part in kp:
-#                         leg_points.append(kp[foot_part])
-                
-#                 leg_points.append((ankle[0] - 10, ankle[1]))
-            
-#             leg_points.append((knee[0] - offset//2, knee[1]))
-        
-#         if len(leg_points) < 4:
-#             return None
-        
-#         mask = self._create_polygon_mask(leg_points, alpha_mask)
-#         return self._create_part_from_mask(f'{side}_leg', mask, leg_points)
-    
-#     def _create_part_from_mask(self, name: str, mask: np.ndarray, 
-#                                keypoints_list: List[Tuple[int, int]]) -> Optional[BodyPart]:
-#         """Create BodyPart from mask."""
-#         # Find contours in mask
-#         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-#         if not contours:
-#             return None
-        
-#         # Get largest contour
-#         main_contour = max(contours, key=cv2.contourArea)
-#         area = cv2.contourArea(main_contour)
-        
-#         if area < 500:  # Too small
-#             return None
-        
-#         # Bounding box
-#         x, y, w, h = cv2.boundingRect(main_contour)
-        
-#         # Center
-#         M = cv2.moments(main_contour)
-#         if M["m00"] != 0:
-#             cx = int(M["m10"] / M["m00"])
-#             cy = int(M["m01"] / M["m00"])
-#         else:
-#             cx, cy = x + w // 2, y + h // 2
-        
-#         # Store keypoints
-#         kp_dict = {}
-#         for i, pt in enumerate(keypoints_list):
-#             kp_dict[f'point_{i}'] = pt
-        
-#         return BodyPart(
-#             name=name,
-#             bbox=(x, y, w, h),
-#             contour=main_contour,
-#             center=(cx, cy),
-#             area=area,
-#             mask=mask,
-#             keypoints=kp_dict
-#         )
-    
-#     def _fallback_region_part(self, name: str, alpha_mask: np.ndarray, 
-#                              start_ratio: float, end_ratio: float) -> Optional[BodyPart]:
-#         """Fallback: extract part by vertical region."""
-#         coords = cv2.findNonZero(alpha_mask)
-#         if coords is None:
-#             return None
-        
-#         x, y, w, h = cv2.boundingRect(coords)
-        
-#         region_y = int(y + h * start_ratio)
-#         region_h = int(h * (end_ratio - start_ratio))
-        
-#         region_mask = np.zeros_like(alpha_mask)
-#         region_mask[region_y:region_y+region_h, x:x+w] = alpha_mask[region_y:region_y+region_h, x:x+w]
-        
-#         contours, _ = cv2.findContours(region_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-#         if not contours:
-#             return None
-        
-#         main_contour = max(contours, key=cv2.contourArea)
-#         area = cv2.contourArea(main_contour)
-        
-#         if area < 100:
-#             return None
-        
-#         bbox = cv2.boundingRect(main_contour)
-#         M = cv2.moments(main_contour)
-#         cx = int(M["m10"] / M["m00"]) if M["m00"] != 0 else bbox[0] + bbox[2]//2
-#         cy = int(M["m01"] / M["m00"]) if M["m00"] != 0 else bbox[1] + bbox[3]//2
-        
-#         return BodyPart(
-#             name=name,
-#             bbox=bbox,
-#             contour=main_contour,
-#             center=(cx, cy),
-#             area=area,
-#             mask=region_mask
-#         )
-    
-#     def _fallback_contour_detection(self) -> Dict[str, BodyPart]:
-#         """Complete fallback when pose detection fails."""
-#         print("Using fallback contour-based detection...")
-        
-#         alpha_mask = self._get_alpha_mask()
-#         coords = cv2.findNonZero(alpha_mask)
-        
-#         if coords is None:
-#             return {}
-        
-#         x, y, w, h = cv2.boundingRect(coords)
-        
-#         parts = {}
-        
-#         # Simple vertical split
-#         regions = {
-#             'head': (0, 0.25),
-#             'body': (0.25, 0.60),
-#             'legs_combined': (0.60, 1.0)
-#         }
-        
-#         for part_name, (start, end) in regions.items():
-#             part = self._fallback_region_part(part_name, alpha_mask, start, end)
-#             if part:
-#                 parts[part_name] = part
-        
-#         # Split legs
-#         if 'legs_combined' in parts:
-#             mid_x = x + w // 2
-#             left_mask = parts['legs_combined'].mask.copy()
-#             left_mask[:, mid_x:] = 0
-            
-#             right_mask = parts['legs_combined'].mask.copy()
-#             right_mask[:, :mid_x] = 0
-            
-#             left_leg = self._create_part_from_mask('left_leg', left_mask, [])
-#             right_leg = self._create_part_from_mask('right_leg', right_mask, [])
-            
-#             if left_leg:
-#                 parts['left_leg'] = left_leg
-#             if right_leg:
-#                 parts['right_leg'] = right_leg
-            
-#             del parts['legs_combined']
-        
-#         return parts
-    
-#     def visualize_detections(self, parts: Dict[str, BodyPart]) -> np.ndarray:
-#         """Visualize detected parts with pose skeleton."""
-#         vis = self.image.copy()
-        
-#         # Draw pose landmarks
-#         if self.pose_landmarks:
-#             if vis.shape[2] == 4:
-#                 vis_bgr = vis[:, :, :3].copy()
-#             else:
-#                 vis_bgr = vis.copy()
-            
-#             self.mp_drawing.draw_landmarks(
-#                 vis_bgr,
-#                 self.pose_landmarks,
-#                 self.mp_pose.POSE_CONNECTIONS,
-#                 self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=3),
-#                 self.mp_drawing.DrawingSpec(color=(0, 0, 255), thickness=2)
-#             )
-            
-#             if vis.shape[2] == 4:
-#                 vis[:, :, :3] = vis_bgr
-#             else:
-#                 vis = vis_bgr
-        
-#         # Draw part boundaries
-#         colors = {
-#             'head': (0, 255, 255),
-#             'body': (255, 0, 0),
-#             'left_arm': (0, 255, 0),
-#             'right_arm': (0, 255, 0),
-#             'left_leg': (255, 0, 255),
-#             'right_leg': (255, 0, 255),
-#         }
-        
-#         for name, part in parts.items():
-#             color = colors.get(name, (128, 128, 128))
-            
-#             # Draw contour
-#             if vis.shape[2] == 4:
-#                 vis_bgr = vis[:, :, :3]
-#                 cv2.drawContours(vis_bgr, [part.contour], -1, color, 2)
-#             else:
-#                 cv2.drawContours(vis, [part.contour], -1, color, 2)
-            
-#             # Draw label
-#             x, y, w, h = part.bbox
-#             label_y = max(y - 5, 15)
-#             cv2.putText(vis if vis.shape[2] == 3 else vis[:, :, :3], name, 
-#                        (x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-#         return vis
-    
-#     def __del__(self):
-#         """Cleanup MediaPipe resources."""
-#         if hasattr(self, 'pose'):
-#             self.pose.close()
-
-
 
 
 """
@@ -1038,16 +37,16 @@ class BodyPartDetector:
         
         # Priority map for conflict resolution (higher = higher priority)
         self.PART_PRIORITY = {
-            'head': 8,
-            'left_upper_arm': 7,
-            'right_upper_arm': 7,
-            'left_lower_arm': 6,
-            'right_lower_arm': 6,
-            'body': 5,
-            'left_upper_leg': 4,
-            'right_upper_leg': 4,
-            'left_lower_leg': 3,
-            'right_lower_leg': 3
+            'head': 10,           # Head claims neck pixels
+            'left_lower_arm': 9,  # Hands over body
+            'right_lower_arm': 9,
+            'left_upper_arm': 8,
+            'right_upper_arm': 8,
+            'left_lower_leg': 7,  # Boots over pants
+            'right_lower_leg': 7,
+            'left_upper_leg': 6,
+            'right_upper_leg': 6,
+            'body': 5             # Body is the base layer
         }
         self.DEFAULT_OVERLAP_PIXELS = 20
         self.DEFAULT_OVERLAP_RATIO = 0.05
@@ -1584,78 +583,159 @@ class BodyPartDetector:
             overlap_padding=max(original_part.overlap_padding, overlap_padding)
         )
     
+    
+    
     def _define_clean_regions(self) -> Dict:
-        """Define non-overlapping region functions."""
+        """Define non-overlapping region functions with dynamic sizing."""
         kp = self.keypoints_pixel
         
+        # Calculate dynamic scale based on shoulder width or height
+        scale_ref = 40.0 # Default
+        if 'left_shoulder' in kp and 'right_shoulder' in kp:
+            # Width between shoulders
+            w = np.linalg.norm(np.array(kp['left_shoulder']) - np.array(kp['right_shoulder']))
+            scale_ref = w * 0.45 # Arms are roughly 45% of shoulder width
+        elif self.height > 0:
+            scale_ref = self.height * 0.08 # Fallback to % of height
+
+        # Ensure minimum thickness
+        limb_thickness = max(25, int(scale_ref))
+        
+        # Pass thickness to functions
         return {
             'head': lambda alpha, assigned: self._region_head(alpha, assigned),
+            # Note: We calculate arms BEFORE body in the priority list, but here we define the logic
+            'left_upper_arm': lambda alpha, assigned: self._region_limb(alpha, assigned, 'left', 'upper_arm', limb_thickness),
+            'right_upper_arm': lambda alpha, assigned: self._region_limb(alpha, assigned, 'right', 'upper_arm', limb_thickness),
+            'left_lower_arm': lambda alpha, assigned: self._region_limb(alpha, assigned, 'left', 'lower_arm', int(limb_thickness * 0.8)),
+            'right_lower_arm': lambda alpha, assigned: self._region_limb(alpha, assigned, 'right', 'lower_arm', int(limb_thickness * 0.8)),
+            'left_upper_leg': lambda alpha, assigned: self._region_limb(alpha, assigned, 'left', 'upper_leg', int(limb_thickness * 1.5)),
+            'right_upper_leg': lambda alpha, assigned: self._region_limb(alpha, assigned, 'right', 'upper_leg', int(limb_thickness * 1.5)),
+            'left_lower_leg': lambda alpha, assigned: self._region_limb(alpha, assigned, 'left', 'lower_leg', limb_thickness),
+            'right_lower_leg': lambda alpha, assigned: self._region_limb(alpha, assigned, 'right', 'lower_leg', limb_thickness),
             'body': lambda alpha, assigned: self._region_body(alpha, assigned),
-            'left_upper_arm': lambda alpha, assigned: self._region_upper_arm(alpha, assigned, 'left'),
-            'right_upper_arm': lambda alpha, assigned: self._region_upper_arm(alpha, assigned, 'right'),
-            'left_lower_arm': lambda alpha, assigned: self._region_lower_arm(alpha, assigned, 'left'),
-            'right_lower_arm': lambda alpha, assigned: self._region_lower_arm(alpha, assigned, 'right'),
-            'left_upper_leg': lambda alpha, assigned: self._region_upper_leg(alpha, assigned, 'left'),
-            'right_upper_leg': lambda alpha, assigned: self._region_upper_leg(alpha, assigned, 'right'),
-            'left_lower_leg': lambda alpha, assigned: self._region_lower_leg(alpha, assigned, 'left'),
-            'right_lower_leg': lambda alpha, assigned: self._region_lower_leg(alpha, assigned, 'right')
         }
-    
+
     def _region_head(self, alpha: np.ndarray, assigned: np.ndarray) -> Optional[np.ndarray]:
-        """Head region: Above shoulders, around face."""
+        """Smart Head Region: Uses face landmarks + expansion."""
         kp = self.keypoints_pixel
-        
-        if 'left_shoulder' not in kp or 'right_shoulder' not in kp:
-            return None
-        
-        # Get shoulder line (neck boundary)
-        ls = kp['left_shoulder']
-        rs = kp['right_shoulder']
-        neck_y = min(ls[1], rs[1]) - 5
-        
-        # Head is everything ABOVE neck_y
-        mask = alpha.copy()
-        mask[neck_y:, :] = 0  # Cut off below neck
-        
-        # Only unassigned pixels
-        mask[assigned > 0] = 0
-        
-        return mask
-    
-    def _region_body(self, alpha: np.ndarray, assigned: np.ndarray) -> Optional[np.ndarray]:
-        """Body region: Between shoulders and hips, center."""
-        kp = self.keypoints_pixel
-        
-        if not all(k in kp for k in ['left_shoulder', 'right_shoulder']):
-            return None
-        
-        ls = kp['left_shoulder']
-        rs = kp['right_shoulder']
-        
-        # Vertical bounds
-        top_y = min(ls[1], rs[1]) - 5
-        
-        if 'left_hip' in kp and 'right_hip' in kp:
-            lh = kp['left_hip']
-            rh = kp['right_hip']
-            bottom_y = max(lh[1], rh[1]) + 10
-        else:
-            bottom_y = top_y + int((self.height - top_y) * 0.5)
-        
-        # Horizontal bounds (center torso)
-        center_x = (ls[0] + rs[0]) // 2
-        width = abs(ls[0] - rs[0]) + 40
-        left_x = max(0, center_x - width // 2)
-        right_x = min(self.width, center_x + width // 2)
-        
-        # Create body mask
         mask = np.zeros_like(alpha)
-        mask[top_y:bottom_y, left_x:right_x] = alpha[top_y:bottom_y, left_x:right_x]
         
-        # Exclude already assigned pixels
+        # 1. Collect all face points
+        face_points = []
+        for name, pt in kp.items():
+            if name in ['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'mouth_left', 'mouth_right']:
+                face_points.append(pt)
+        
+        if not face_points:
+            return None
+            
+        # 2. Create a convex hull around face points
+        hull = cv2.convexHull(np.array(face_points))
+        cv2.fillConvexPoly(mask, hull, 255)
+        
+        # 3. Expand outwards to capture hair/helmet (Dilate)
+        # Calculate expansion based on face size
+        if len(face_points) >= 2:
+            x, y, w, h = cv2.boundingRect(np.array(face_points))
+            dilation = max(20, int(w * 0.6)) 
+        else:
+            dilation = 30
+            
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation, dilation))
+        mask = cv2.dilate(mask, kernel, iterations=1)
+        
+        # 4. Limit bottom by shoulders (to not eat the chest)
+        if 'left_shoulder' in kp and 'right_shoulder' in kp:
+            neck_y = min(kp['left_shoulder'][1], kp['right_shoulder'][1])
+            # Allow a little dip for the chin (neck_y + 10)
+            mask[neck_y + 10:, :] = 0 
+            
+        # 5. Intersect with alpha
+        mask = cv2.bitwise_and(mask, alpha)
+        
+        # 6. Only take unassigned pixels (Head has highest priority usually, so this is fine)
         mask[assigned > 0] = 0
         
         return mask
+
+    def _region_limb(self, alpha: np.ndarray, assigned: np.ndarray, side: str, part: str, thickness: int) -> Optional[np.ndarray]:
+        """Generic limb segmenter with dynamic thickness."""
+        kp = self.keypoints_pixel
+        
+        # Map part names to keypoint names
+        map_start = {
+            'upper_arm': f'{side}_shoulder', 'lower_arm': f'{side}_elbow',
+            'upper_leg': f'{side}_hip',      'lower_leg': f'{side}_knee'
+        }
+        map_end = {
+            'upper_arm': f'{side}_elbow',    'lower_arm': f'{side}_wrist',
+            'upper_leg': f'{side}_knee',     'lower_leg': f'{side}_ankle'
+        }
+        
+        start_key = map_start.get(part)
+        end_key = map_end.get(part)
+        
+        if start_key not in kp or end_key not in kp:
+            return None
+            
+        p1 = kp[start_key]
+        p2 = kp[end_key]
+        
+        # Create mask
+        mask = np.zeros_like(alpha)
+        cv2.line(mask, p1, p2, 255, thickness)
+        
+        # Add hands/feet extensions
+        if part == 'lower_arm':
+            # Extend past wrist for hand
+            vec = np.array(p2) - np.array(p1)
+            length = np.linalg.norm(vec)
+            if length > 0:
+                extension = (vec / length) * (length * 0.4) # Add 40% length for hand
+                p3 = (int(p2[0] + extension[0]), int(p2[1] + extension[1]))
+                cv2.line(mask, p2, p3, 255, int(thickness * 1.2)) # Hand is wider
+                
+        elif part == 'lower_leg':
+            # Extend for foot (check for foot index)
+            foot_key = f'{side}_foot_index'
+            if foot_key in kp:
+                cv2.line(mask, p2, kp[foot_key], 255, thickness)
+        
+        # Intersect with alpha
+        mask = cv2.bitwise_and(mask, alpha)
+        
+        # CRITICAL CHANGE: Soft Layering
+        # If this limb (e.g. arm) is trying to claim pixels already assigned to something lower priority (like body),
+        # we ALLOW it. We only block if assigned > current_priority.
+        # But since we iterate in order, we just check if it's 0 for now.
+        # For a truly robust fix, we rely on the `PART_PRIORITY` order defined in __init__.
+        # Ensure your __init__ has high priority for arms!
+        
+        mask[assigned > 0] = 0
+        
+        return mask
+
+    def _region_body(self, alpha: np.ndarray, assigned: np.ndarray) -> Optional[np.ndarray]:
+        """Body region: The scavenger."""
+        # The body simply takes whatever is left in the center area
+        mask = alpha.copy()
+        
+        # Remove already assigned limbs/head
+        mask[assigned > 0] = 0
+        
+        # Clean up noise - Remove small disconnected blobs
+        # (e.g. stray pixels far from the center)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+            
+        # Keep only the largest contour (the torso)
+        largest = max(contours, key=cv2.contourArea)
+        clean_mask = np.zeros_like(mask)
+        cv2.drawContours(clean_mask, [largest], -1, 255, -1)
+        
+        return clean_mask
     
     def _region_upper_arm(self, alpha: np.ndarray, assigned: np.ndarray, side: str) -> Optional[np.ndarray]:
         """Upper arm region: shoulder to elbow."""

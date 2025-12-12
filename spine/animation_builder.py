@@ -53,6 +53,52 @@ class AnimationBuilder:
         """List all available animation names."""
         return list(self.engine.animations.keys())
     
+    def regenerate_animation(self, name: str, params: Dict[str, Any]) -> bool:
+        """
+        Regenerate an existing animation with new parameters.
+        Returns True if successful.
+        """
+        new_anim = None
+        
+        # Dispatch to specific generators based on name
+        if name == "walk":
+            # Extract params with defaults
+            duration = params.get("duration", 1.0)
+            stride = params.get("stride_scale", 1.0)
+            bounce = params.get("bounce_scale", 1.0)
+            swing = params.get("arm_swing", 1.0)
+            
+            # This calls the updated create_walk_animation from step 1
+            new_anim = create_walk_animation(
+                duration=float(duration),
+                stride_scale=float(stride),
+                bounce_scale=float(bounce),
+                arm_swing=float(swing)
+            )
+            
+        elif name == "jump":
+            # For now, just duration, but can be expanded later
+            duration = params.get("duration", 1.2)
+            # height = params.get("height_scale", 1.0) # Placeholder for future
+            new_anim = create_jump_animation(duration=float(duration))
+            
+        elif name.startswith("wave"):
+            duration = params.get("duration", 2.0)
+            hand = "L" if "_l" in name else "R"
+            new_anim = create_wave_animation(duration=float(duration), hand=hand)
+            
+        elif name == "idle":
+            duration = params.get("duration", 3.0)
+            new_anim = create_idle_animation(duration=float(duration))
+
+        if new_anim:
+            # Replace the animation in the engine
+            # Note: We keep the original name key so it overwrites the existing entry
+            self.engine.animations[name] = new_anim
+            return True
+            
+        return False
+    
     def add_animations_to_skeleton(
         self,
         skeleton_json: Dict[str, Any],
@@ -103,13 +149,14 @@ class AnimationBuilder:
                 if bone_name in existing_bones:
                     filtered_anim["bones"][bone_name] = bone_data
                 else:
-                    print(f"Filtering out bone '{bone_name}' from animation '{name}' (bone doesn't exist)")
+                    # Optional: Log this only in verbose mode
+                    pass
             
             # Only add animation if it has at least one valid bone track
             if filtered_anim["bones"]:
                 filtered_anims[name] = filtered_anim
             else:
-                print(f"Skipping animation '{name}' - no valid bone tracks")
+                print(f"Skipping animation '{name}' - no valid bone tracks for this skeleton")
         
         # Add to skeleton
         if "animations" not in skeleton_json:
@@ -228,7 +275,10 @@ if __name__ == "__main__":
     builder = AnimationBuilder()
     print(f"Available animations: {builder.list_animations()}")
     
+    # Test regeneration
+    print("Regenerating walk with stride_scale=1.5...")
+    builder.regenerate_animation("walk", {"stride_scale": 1.5})
+    
     # Test export
-    anims_json = builder.export_animations_json()
-    print(f"Exported {len(anims_json)} animations")
-
+    anims_json = builder.export_animations_json(["walk"])
+    print(f"Exported walk animation keys: {len(anims_json['walk']['bones'])}")

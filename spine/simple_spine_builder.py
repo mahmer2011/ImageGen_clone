@@ -1,26 +1,17 @@
 """
-Simple Spine Builder - Clean, minimal pipeline using assembly preview as ground truth.
-
-This module creates Spine skeletons by:
-1. Using MediaPipe landmarks detected on the assembly preview
-2. Creating bones from landmark positions
-3. Mapping parts directly from assembly preview positions to attachments
+Advanced Spine Builder (Mesh & Auto-Weights)
+Generates weighted meshes for smooth bending characters.
 """
-
 from __future__ import annotations
-
 import json
 import math
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
 
 def image_to_spine_coords(x: float, y: float, img_width: int, img_height: int) -> Tuple[float, float]:
     """Convert image coordinates (top-left origin) to Spine coordinates (centered, Y-flipped)."""
     spine_x = x - (img_width / 2)
     spine_y = (img_height - y) - (img_height / 2)
     return spine_x, spine_y
-
 
 def create_simple_skeleton(
     landmarks: List[Dict[str, Any]],
@@ -30,508 +21,392 @@ def create_simple_skeleton(
     segmentation_metadata: Optional[Dict[str, Any]] = None,
     character_name: str = "character"
 ) -> Dict[str, Any]:
-    """
-    Create a complete Spine skeleton from landmarks and part metadata.
     
-    Args:
-        landmarks: MediaPipe landmarks detected on assembly preview
-        assembly_width: Width of assembly preview image
-        assembly_height: Height of assembly preview image
-        part_metadata: Atlas part metadata (width, height, trim offsets)
-        segmentation_metadata: Segmentation metadata with assembly positions
-        character_name: Name for the skeleton
-        
-    Returns:
-        Complete Spine JSON structure
-    """
-    # Build landmark lookup
-    lm_dict: Dict[str, Dict[str, Any]] = {}
-    for lm in landmarks:
-        name = str(lm.get("name", "")).lower()
-        if name:
-            lm_dict[name] = lm
+    # 1. SETUP LOOKUPS
+    lm_dict = {str(lm.get("name", "")).lower(): lm for lm in landmarks}
     
-    # Build part positions from segmentation metadata
-    part_positions: Dict[str, Dict[str, float]] = {}
-    if segmentation_metadata:
-        for part_entry in segmentation_metadata.get("parts", []):
-            part_name = part_entry.get("name")
-            assembly_info = part_entry.get("assembly")
-            if part_name and assembly_info:
-                center = assembly_info.get("center")
-                origin = assembly_info.get("origin")
-                if center and isinstance(center, dict):
-                    part_positions[part_name] = {
-                        "center_x": float(center.get("x", 0)),
-                        "center_y": float(center.get("y", 0)),
-                    }
-                elif origin and isinstance(origin, dict):
-                    size = assembly_info.get("size", {})
-                    w = float(size.get("w", 0))
-                    h = float(size.get("h", 0))
-                    part_positions[part_name] = {
-                        "center_x": float(origin.get("x", 0)) + w / 2.0,
-                        "center_y": float(origin.get("y", 0)) + h / 2.0,
-                    }
-    
-    # Create bones from landmarks
+    # Map Part Names -> Bone Names
+    # (The bone that "owns" this part)
+    part_owner_map = {
+        "head": "head",
+        "body": "torso",
+        "left_upper_arm": "upper_arm_L", "left_lower_arm": "lower_arm_L",
+        "right_upper_arm": "upper_arm_R", "right_lower_arm": "lower_arm_R",
+        "left_upper_leg": "upper_leg_L", "left_lower_leg": "lower_leg_L",
+        "right_upper_leg": "upper_leg_R", "right_lower_leg": "lower_leg_R",
+        "left_foot": "lower_leg_L", "right_foot": "lower_leg_R" # Feet attach to lower legs for now
+    }
+
+    # 2. CREATE BONES
+    # We calculate bone positions based on Landmarks
     bones = []
     
-    # Root bone at hip center
-    left_hip = lm_dict.get("left_hip")
-    right_hip = lm_dict.get("right_hip")
-    if left_hip and right_hip:
-        root_x = (left_hip["x"] + right_hip["x"]) / 2
-        root_y = (left_hip["y"] + right_hip["y"]) / 2
-    else:
-        root_x = assembly_width / 2
-        root_y = assembly_height / 2
-    
-    root_spine_x, root_spine_y = image_to_spine_coords(root_x, root_y, assembly_width, assembly_height)
-    bones.append({
-        "name": "root",
-        "parent": None,
-        "x": round(root_spine_x, 2),
-        "y": round(root_spine_y, 2),
-        "rotation": 0,
-        "length": 0
-    })
-    
-    # Get list of parts that actually exist (before creating bones)
-    existing_parts = set(part_metadata.keys())
-    # Remove non-part files
-    existing_parts = {p for p in existing_parts if p not in {
-        "detection_visualization", "no_background", "outline_only", 
-        "outline_overlay", "assembly_preview"
-    }}
-    print(f"Creating skeleton for {len(existing_parts)} parts: {sorted(existing_parts)}")
-    
-    # Torso bone (only if body/torso part exists)
-    left_shoulder = lm_dict.get("left_shoulder")
-    right_shoulder = lm_dict.get("right_shoulder")
-    has_body = "body" in existing_parts or "torso" in existing_parts
-    if has_body and left_shoulder and right_shoulder and left_hip and right_hip:
-        torso_x = (left_shoulder["x"] + right_shoulder["x"] + left_hip["x"] + right_hip["x"]) / 4
-        torso_y = (left_shoulder["y"] + right_shoulder["y"] + left_hip["y"] + right_hip["y"]) / 4
-        torso_spine_x, torso_spine_y = image_to_spine_coords(torso_x, torso_y, assembly_width, assembly_height)
-        bones.append({
-            "name": "torso",
-            "parent": "root",
-            "x": round(torso_spine_x - root_spine_x, 2),
-            "y": round(torso_spine_y - root_spine_y, 2),
-            "rotation": 0,
-            "length": 50
-        })
-    
-    # Head bone (only if head part exists)
-    nose = lm_dict.get("nose")
-    has_head = "head" in existing_parts
-    if has_head and nose and left_shoulder and right_shoulder:
-        neck_x = (left_shoulder["x"] + right_shoulder["x"]) / 2
-        neck_y = (left_shoulder["y"] + right_shoulder["y"]) / 2
-        head_x = nose["x"]
-        head_y = nose["y"] - 30  # Slightly above nose
+    # Root
+    root_x, root_y = _get_center(lm_dict, "left_hip", "right_hip", fallback=(assembly_width/2, assembly_height/2))
+    root_sx, root_sy = image_to_spine_coords(root_x, root_y, assembly_width, assembly_height)
+    bones.append({"name": "root", "x": round(root_sx, 2), "y": round(root_sy, 2), "rotation": 0})
+
+    # Helper to add bone
+    def add_bone(name, parent, start_lm, end_lm=None):
+        if not start_lm: return
         
-        head_spine_x, head_spine_y = image_to_spine_coords(head_x, head_y, assembly_width, assembly_height)
-        neck_spine_x, neck_spine_y = image_to_spine_coords(neck_x, neck_y, assembly_width, assembly_height)
+        # Parent Position (Spine Coords)
+        parent_bone = next((b for b in bones if b["name"] == parent), bones[0])
+        # We need absolute spine coords of parent to calculate relative offset
+        # (Simplified: assuming parent rotation is 0 for initial setup calculation)
+        # For a robust system, we track absolute positions.
+        
+        # Calculate Start Point
+        sx, sy = start_lm['x'], start_lm['y']
+        spx, spy = image_to_spine_coords(sx, sy, assembly_width, assembly_height)
+        
+        # Calculate End Point (for length/rotation)
+        length = 0
+        rotation = 0
+        if end_lm:
+            ex, ey = end_lm['x'], end_lm['y']
+            epx, epy = image_to_spine_coords(ex, ey, assembly_width, assembly_height)
+            dx, dy = epx - spx, epy - spy
+            length = math.sqrt(dx*dx + dy*dy)
+            rotation = math.degrees(math.atan2(dy, dx))
+            
+            # Spine bones point relative to parent. 
+            # If parent has rotation, we subtract it.
+            # But here we are building a flat hierarchy relative to root/torso effectively
+            # Let's keep it simple: Relative to Parent's absolute rotation?
+            # To avoid complex transform math, we'll set parent rotations to 0 in setup pose
+            # and encode the angle in the child.
+        
+        # Calculate Relative Position to Parent
+        # (This assumes we tracked parent absolute position. Since we build in order, we can).
+        parent_abs_x, parent_abs_y = _get_bone_abs_spine(parent_bone, bones)
+        
+        rel_x = spx - parent_abs_x
+        rel_y = spy - parent_abs_y
         
         bones.append({
-            "name": "head",
-            "parent": "torso" if any(b["name"] == "torso" for b in bones) else "root",
-            "x": round(head_spine_x - neck_spine_x, 2),
-            "y": round(head_spine_y - neck_spine_y, 2),
-            "rotation": 0,
-            "length": 30
+            "name": name,
+            "parent": parent,
+            "x": round(rel_x, 2),
+            "y": round(rel_y, 2),
+            "length": round(length, 2),
+            "rotation": round(rotation, 2)
         })
+
+    # -- Build Skeleton Hierarchy --
     
-    # Get list of parts that actually exist
-    existing_parts = set(part_metadata.keys())
-    # Remove non-part files
-    existing_parts = {p for p in existing_parts if p not in {
-        "detection_visualization", "no_background", "outline_only", 
-        "outline_overlay", "assembly_preview"
-    }}
+    # Torso
+    # Center of shoulders + Center of hips
+    sh_x, sh_y = _get_center(lm_dict, "left_shoulder", "right_shoulder")
+    hip_x, hip_y = _get_center(lm_dict, "left_hip", "right_hip")
+    add_bone("torso", "root", {'x':(sh_x+hip_x)/2, 'y':(sh_y+hip_y)/2}, {'x':sh_x, 'y':sh_y}) # Points up
     
-    # Arm bones - only create if parts exist
-    def create_arm_bones(side: str):
-        shoulder = lm_dict.get(f"{side}_shoulder")
-        elbow = lm_dict.get(f"{side}_elbow")
-        wrist = lm_dict.get(f"{side}_wrist")
-        
-        # Convert side to suffix: "left" -> "_L", "right" -> "_R"
-        suffix = "_L" if side == "left" else "_R"
-        
-        has_upper_arm = f"{side}_upper_arm" in existing_parts
-        has_lower_arm = f"{side}_lower_arm" in existing_parts
-        
-        # Only create upper arm bone if we have the part OR if we need it as parent for lower arm
-        if has_upper_arm and shoulder and elbow:
-            elbow_spine_x, elbow_spine_y = image_to_spine_coords(
-                elbow["x"], elbow["y"], assembly_width, assembly_height
-            )
-            shoulder_spine_x, shoulder_spine_y = image_to_spine_coords(
-                shoulder["x"], shoulder["y"], assembly_width, assembly_height
-            )
-            
-            bone_name = f"upper_arm{suffix}"
-            bones.append({
-                "name": bone_name,
-                "parent": "torso" if any(b["name"] == "torso" for b in bones) else "root",
-                "x": round(elbow_spine_x - shoulder_spine_x, 2),
-                "y": round(elbow_spine_y - shoulder_spine_y, 2),
-                "rotation": 0,
-                "length": 40
-            })
-        
-        # Create lower arm bone if we have the part
-        if has_lower_arm and elbow and wrist:
-            # Need parent bone - use upper_arm if it exists, otherwise torso
-            parent_bone = f"upper_arm{suffix}" if has_upper_arm else ("torso" if any(b["name"] == "torso" for b in bones) else "root")
-            
-            # Get parent position for relative calculation
-            parent_pos = (0, 0)
-            if parent_bone != "root":
-                parent_bone_obj = next((b for b in bones if b["name"] == parent_bone), None)
-                if parent_bone_obj:
-                    parent_pos = _bone_to_image_coords(parent_bone_obj, bones, assembly_width, assembly_height)
-            
-            elbow_spine_x, elbow_spine_y = image_to_spine_coords(
-                elbow["x"], elbow["y"], assembly_width, assembly_height
-            )
-            wrist_spine_x, wrist_spine_y = image_to_spine_coords(
-                wrist["x"], wrist["y"], assembly_width, assembly_height
-            )
-            
-            # Calculate relative to parent
-            parent_spine_x, parent_spine_y = image_to_spine_coords(parent_pos[0], parent_pos[1], assembly_width, assembly_height)
-            elbow_rel_x = elbow_spine_x - parent_spine_x
-            elbow_rel_y = elbow_spine_y - parent_spine_y
-            wrist_rel_x = wrist_spine_x - parent_spine_x
-            wrist_rel_y = wrist_spine_y - parent_spine_y
-            
-            bones.append({
-                "name": f"lower_arm{suffix}",
-                "parent": parent_bone,
-                "x": round(wrist_rel_x - elbow_rel_x, 2),
-                "y": round(wrist_rel_y - elbow_rel_y, 2),
-                "rotation": 0,
-                "length": 30
-            })
+    # Head
+    add_bone("head", "torso", lm_dict.get("nose"), None) # Just a point for now
     
-    create_arm_bones("left")
-    create_arm_bones("right")
+    # Arms
+    add_bone("upper_arm_L", "torso", lm_dict.get("left_shoulder"), lm_dict.get("left_elbow"))
+    add_bone("lower_arm_L", "upper_arm_L", lm_dict.get("left_elbow"), lm_dict.get("left_wrist"))
+    add_bone("upper_arm_R", "torso", lm_dict.get("right_shoulder"), lm_dict.get("right_elbow"))
+    add_bone("lower_arm_R", "upper_arm_R", lm_dict.get("right_elbow"), lm_dict.get("right_wrist"))
     
-    # Leg bones - only create if parts exist
-    def create_leg_bones(side: str):
-        hip = lm_dict.get(f"{side}_hip")
-        knee = lm_dict.get(f"{side}_knee")
-        ankle = lm_dict.get(f"{side}_ankle")
-        
-        # Convert side to suffix: "left" -> "_L", "right" -> "_R"
-        suffix = "_L" if side == "left" else "_R"
-        
-        has_upper_leg = f"{side}_upper_leg" in existing_parts
-        has_lower_leg = f"{side}_lower_leg" in existing_parts
-        
-        # Only create upper leg bone if we have the part
-        if has_upper_leg and hip and knee:
-            knee_spine_x, knee_spine_y = image_to_spine_coords(
-                knee["x"], knee["y"], assembly_width, assembly_height
-            )
-            hip_spine_x, hip_spine_y = image_to_spine_coords(
-                hip["x"], hip["y"], assembly_width, assembly_height
-            )
-            
-            bone_name = f"upper_leg{suffix}"
-            bones.append({
-                "name": bone_name,
-                "parent": "root",
-                "x": round(knee_spine_x - hip_spine_x, 2),
-                "y": round(knee_spine_y - hip_spine_y, 2),
-                "rotation": 0,
-                "length": 50
-            })
-        
-        # Create lower leg bone if we have the part
-        if has_lower_leg and knee and ankle:
-            # Need parent bone - use upper_leg if it exists, otherwise root
-            parent_bone = f"upper_leg{suffix}" if has_upper_leg else "root"
-            
-            # Get parent position for relative calculation
-            parent_pos = (0, 0)
-            if parent_bone != "root":
-                parent_bone_obj = next((b for b in bones if b["name"] == parent_bone), None)
-                if parent_bone_obj:
-                    parent_pos = _bone_to_image_coords(parent_bone_obj, bones, assembly_width, assembly_height)
-            
-            knee_spine_x, knee_spine_y = image_to_spine_coords(
-                knee["x"], knee["y"], assembly_width, assembly_height
-            )
-            ankle_spine_x, ankle_spine_y = image_to_spine_coords(
-                ankle["x"], ankle["y"], assembly_width, assembly_height
-            )
-            
-            # Calculate relative to parent
-            parent_spine_x, parent_spine_y = image_to_spine_coords(parent_pos[0], parent_pos[1], assembly_width, assembly_height)
-            knee_rel_x = knee_spine_x - parent_spine_x
-            knee_rel_y = knee_spine_y - parent_spine_y
-            ankle_rel_x = ankle_spine_x - parent_spine_x
-            ankle_rel_y = ankle_spine_y - parent_spine_y
-            
-            bones.append({
-                "name": f"lower_leg{suffix}",
-                "parent": parent_bone,
-                "x": round(ankle_rel_x - knee_rel_x, 2),
-                "y": round(ankle_rel_y - knee_rel_y, 2),
-                "rotation": 0,
-                "length": 40
-            })
-    
-    create_leg_bones("left")
-    create_leg_bones("right")
-    
-    # Create slots and attachments
+    # Legs
+    add_bone("upper_leg_L", "root", lm_dict.get("left_hip"), lm_dict.get("left_knee"))
+    add_bone("lower_leg_L", "upper_leg_L", lm_dict.get("left_knee"), lm_dict.get("left_ankle"))
+    add_bone("upper_leg_R", "root", lm_dict.get("right_hip"), lm_dict.get("right_knee"))
+    add_bone("lower_leg_R", "upper_leg_R", lm_dict.get("right_knee"), lm_dict.get("right_ankle"))
+
+    # 3. CREATE MESH ATTACHMENTS
     slots = []
-    attachments = {}
+    skins = {"default": {}}
     
-    # Map part names to bone names (parts use "left_", bones use "_L" suffix)
-    # Only include parts that actually exist
-    part_to_bone = {
-        "head": "head",
-        "body": "torso",  # Part is "body", bone is "torso"
-        "torso": "torso",
-        "left_upper_arm": "upper_arm_L",
-        "left_lower_arm": "lower_arm_L",
-        "right_upper_arm": "upper_arm_R",
-        "right_lower_arm": "lower_arm_R",
-        "left_upper_leg": "upper_leg_L",
-        "left_lower_leg": "lower_leg_L",
-        "right_upper_leg": "upper_leg_R",
-        "right_lower_leg": "lower_leg_R",
-    }
-    # Filter to only parts that exist
-    part_to_bone = {k: v for k, v in part_to_bone.items() if k in existing_parts}
+    # Sort parts for draw order (Z-index)
+    # Reuse z-index logic from segmenter or list explicitly
+    draw_order = [
+        "right_lower_leg", "right_upper_leg", "right_lower_arm", "right_upper_arm", 
+        "body", "head", 
+        "left_upper_leg", "left_lower_leg", "left_upper_arm", "left_lower_arm"
+    ]
     
-    # Map bone names to slot names (for when bone name differs from part name)
-    bone_to_slot = {
-        "torso": "body"  # Bone is "torso", but slot should be "body" to match part name
-    }
-    
-    # Create slots and attachments for each part
-    for part_name, meta in part_metadata.items():
-        # Skip non-part files
-        if part_name in {"detection_visualization", "no_background", "outline_only", 
-                        "outline_overlay", "assembly_preview"}:
-            continue
+    for part_name in draw_order:
+        # Check if part exists
+        if part_name not in part_metadata: continue
         
-        # Get part dimensions from atlas metadata
-        if hasattr(meta, "width"):
-            width = int(meta.width)
-            height = int(meta.height)
-            trim_x = float(meta.trim_offset_x)
-            trim_y = float(meta.trim_offset_y)
-        elif isinstance(meta, dict):
-            width = int(meta.get("width", 0))
-            height = int(meta.get("height", 0))
-            trim_x = float(meta.get("trim_offset_x", 0))
-            trim_y = float(meta.get("trim_offset_y", 0))
-        else:
-            continue
+        # Get Metadata
+        meta = part_metadata[part_name] # Atlas info
+        seg_info = _find_seg_info(segmentation_metadata, part_name) # Positional info
+        if not seg_info: continue
         
-        if width <= 0 or height <= 0:
-            continue
+        bone_name = part_owner_map.get(part_name, "root")
+        bone = next((b for b in bones if b["name"] == bone_name), bones[0])
         
-        # Find bone for this part
-        bone_name = part_to_bone.get(part_name, "root")
-        
-        # Slot name is the part name (what we use in the atlas)
-        # But if bone name differs, we might need to handle it
-        slot_name = part_name
-        
-        # Special case: if part is "body" but bone is "torso", 
-        # we still use "body" as slot name (matches atlas part name)
-        
-        # Get part center from assembly preview
-        part_pos = part_positions.get(part_name)
-        if not part_pos:
-            # Fallback: use landmark position
-            landmark = None
-            if part_name == "head":
-                landmark = lm_dict.get("nose")
-            elif part_name in ("body", "torso"):
-                if left_shoulder and right_shoulder and left_hip and right_hip:
-                    part_pos = {
-                        "center_x": (left_shoulder["x"] + right_shoulder["x"] + left_hip["x"] + right_hip["x"]) / 4,
-                        "center_y": (left_shoulder["y"] + right_shoulder["y"] + left_hip["y"] + right_hip["y"]) / 4,
-                    }
-            else:
-                # Try to find matching landmark
-                for lm_name, lm_data in lm_dict.items():
-                    if part_name.replace("_", "").replace("left", "").replace("right", "").lower() in lm_name:
-                        landmark = lm_data
-                        break
-            
-            if landmark and not part_pos:
-                part_pos = {
-                    "center_x": landmark["x"],
-                    "center_y": landmark["y"],
-                }
-        
-        if not part_pos:
-            print(f"WARNING: Could not find position for part '{part_name}', skipping")
-            continue
-        
-        # Get pivot point from segmentation metadata (where part should rotate from)
-        pivot_point = None
-        assembly_origin = None
-        if segmentation_metadata:
-            for part_entry in segmentation_metadata.get("parts", []):
-                if part_entry.get("name") == part_name:
-                    # Get pivot point (absolute coordinates in original image)
-                    pivot_data = part_entry.get("pivot")
-                    if pivot_data and isinstance(pivot_data, dict):
-                        pivot_abs = pivot_data.get("absolute")
-                        if pivot_abs and isinstance(pivot_abs, dict):
-                            pivot_point = {
-                                "x": float(pivot_abs.get("x", 0)),
-                                "y": float(pivot_abs.get("y", 0))
-                            }
-                    
-                    # Get assembly origin for trimmed part position
-                    assembly_info = part_entry.get("assembly")
-                    if assembly_info:
-                        origin = assembly_info.get("origin")
-                        if origin:
-                            assembly_origin = (float(origin.get("x", 0)), float(origin.get("y", 0)))
-                    break
-        
-        # Get bone position
-        bone = next((b for b in bones if b["name"] == bone_name), None)
-        if not bone:
-            bone_name = "root"
-            bone = bones[0]
-        
-        # Calculate bone position in image space
-        bone_img_x, bone_img_y = _bone_to_image_coords(bone, bones, assembly_width, assembly_height)
-        
-        # Use pivot point if available, otherwise fall back to part center
-        if pivot_point:
-            # Pivot point is in original image coordinates
-            pivot_x = pivot_point["x"]
-            pivot_y = pivot_point["y"]
-        else:
-            # Fallback: use part center
-            if assembly_origin:
-                # Calculate trimmed center from origin
-                pivot_x = assembly_origin[0] + trim_x + (width / 2.0)
-                pivot_y = assembly_origin[1] + trim_y + (height / 2.0)
-            else:
-                # Use part center, adjust for trim
-                pivot_x = part_pos["center_x"] - (width / 2.0) + trim_x + (width / 2.0)
-                pivot_y = part_pos["center_y"] - (height / 2.0) + trim_y + (height / 2.0)
-        
-        # Convert pivot point and bone position to Spine coordinates
-        pivot_spine_x, pivot_spine_y = image_to_spine_coords(
-            pivot_x, pivot_y, assembly_width, assembly_height
-        )
-        bone_spine_x, bone_spine_y = image_to_spine_coords(
-            bone_img_x, bone_img_y, assembly_width, assembly_height
+        # Generate Mesh
+        mesh_data = _generate_mesh(
+            part_name, 
+            meta, 
+            seg_info, 
+            bone, 
+            bones,
+            assembly_width, 
+            assembly_height
         )
         
-        # Attachment offset = pivot point - bone position
-        # This ensures the part rotates around the pivot (joint) point, not its center
-        attachment_x = round(pivot_spine_x - bone_spine_x, 2)
-        attachment_y = round(pivot_spine_y - bone_spine_y, 2)
-        
-        # Create slot (slot name = part name)
+        # Add Slot
         slots.append({
-            "name": slot_name,
+            "name": part_name,
             "bone": bone_name,
-            "attachment": slot_name,  # Default attachment name matches slot name
-            "color": "ffffffff"
+            "attachment": part_name
         })
         
-        # Create attachment (organized by slot name, not bone name)
-        if slot_name not in attachments:
-            attachments[slot_name] = {}
-        attachments[slot_name][slot_name] = {
-            "type": "region",
-            "x": attachment_x,
-            "y": attachment_y,
-            "width": width,
-            "height": height,
-            "rotation": 0
-        }
-    
-    # Validate that all slots reference bones that exist
-    bone_names = {b["name"] for b in bones}
-    valid_slots = []
-    for slot in slots:
-        if slot["bone"] in bone_names:
-            valid_slots.append(slot)
-        else:
-            print(f"WARNING: Slot '{slot['name']}' references non-existent bone '{slot['bone']}', removing slot")
-            # Also remove from attachments if it exists
-            if slot["name"] in attachments:
-                del attachments[slot["name"]]
-    slots = valid_slots
-    
-    # Build final JSON structure (Spine 4.x format)
-    skeleton = {
-        "skeleton": {
-            "hash": character_name,
-            "spine": "4.1.0",
-            "width": assembly_width,
-            "height": assembly_height,
-            "images": "./"
-        },
+        # Add Skin Attachment
+        if part_name not in skins["default"]:
+            skins["default"][part_name] = {}
+        
+        skins["default"][part_name][part_name] = mesh_data
+
+    # 4. COMPILE
+    return {
+        "skeleton": {"spine": "4.1.0", "width": assembly_width, "height": assembly_height},
         "bones": bones,
         "slots": slots,
-        "skins": [{
-            "name": "default",
-            "attachments": attachments
-        }],
-        "animations": {}
+        "skins": [ {"name": "default", "attachments": skins["default"]} ],
+        "animations": {} 
     }
-    
-    print(f"Created skeleton with {len(bones)} bones, {len(slots)} slots, {len(attachments)} attachment groups")
-    return skeleton
 
+# --- HELPERS ---
 
-def _bone_to_image_coords(bone: Dict[str, Any], all_bones: List[Dict[str, Any]], 
-                          img_width: int, img_height: int) -> Tuple[float, float]:
-    """Convert bone position to image coordinates."""
-    # Start with root bone position
-    root_bone = next((b for b in all_bones if b["name"] == "root"), None)
-    if not root_bone:
-        return img_width / 2, img_height / 2
-    
-    # Convert root to image coords
-    root_img_x = root_bone["x"] + (img_width / 2)
-    root_img_y = (img_height / 2) - root_bone["y"]
-    
-    # If this is the root bone, return its position
+def _get_bone_abs_spine(bone, all_bones):
+    """Recursively calculate absolute spine position."""
     if bone["name"] == "root":
-        return root_img_x, root_img_y
+        return bone["x"], bone["y"]
     
-    # Traverse up parent chain to accumulate position
-    x = bone["x"]
-    y = bone["y"]
-    parent_name = bone.get("parent")
-    
-    while parent_name:
-        parent = next((b for b in all_bones if b["name"] == parent_name), None)
-        if not parent:
-            break
-        x += parent["x"]
-        y += parent["y"]
-        if parent_name == "root":
-            break
-        parent_name = parent.get("parent")
-    
-    # Convert accumulated Spine coords to image coords
-    img_x = x + (img_width / 2)
-    img_y = (img_height / 2) - y
-    
-    return img_x, img_y
+    parent = next(b for b in all_bones if b["name"] == bone["parent"])
+    px, py = _get_bone_abs_spine(parent, all_bones)
+    return px + bone["x"], py + bone["y"]
 
+def _get_center(lm_dict, k1, k2, fallback=(0,0)):
+    p1 = lm_dict.get(k1)
+    p2 = lm_dict.get(k2)
+    if p1 and p2:
+        return (p1['x'] + p2['x'])/2, (p1['y'] + p2['y'])/2
+    if p1: return p1['x'], p1['y']
+    if p2: return p2['x'], p2['y']
+    return fallback
+
+def _find_seg_info(meta, name):
+    if not meta: return None
+    for p in meta.get("parts", []):
+        if p["name"] == name: return p
+    return None
+
+def _generate_mesh(part_name, atlas_meta, seg_info, owner_bone, all_bones, aw, ah):
+    """
+    Generates a Weighted Mesh Attachment.
+    Creates a grid of vertices covering the part's bounding box.
+    Calculates weights relative to the Owner Bone and its Parent/Child.
+    """
+    # 1. Get Image Dimensions
+    # atlas_meta is PartPackingInfo(width, height, ...)
+    w = atlas_meta.width
+    h = atlas_meta.height
+    
+    # 2. Get Absolute Position on Canvas
+    # seg_info['bbox'] gives x,y,w,h in original image pixels (top-left)
+    bbox = seg_info['bbox']
+    abs_x = bbox['x']
+    abs_y = bbox['y']
+    
+    # 3. Create Grid (e.g. 3x3 for limbs, 4x4 for body)
+    cols = 3
+    rows = 4 if "leg" in part_name or "arm" in part_name else 3
+    
+    vertices = [] # [x1, y1, w1, ...] Weighted format
+    uvs = []
+    triangles = []
+    
+    # We need the Spine absolute coords of the owner bone
+    bone_sx, bone_sy = _get_bone_abs_spine(owner_bone, all_bones)
+    
+    # Determine "Influence" Bones for weighting
+    # (e.g. Lower Arm is influenced by Upper Arm at the top)
+    parent_bone = next((b for b in all_bones if b["name"] == owner_bone["parent"]), None)
+    
+    parent_sx, parent_sy = (0,0)
+    if parent_bone:
+        parent_sx, parent_sy = _get_bone_abs_spine(parent_bone, all_bones)
+
+    # 4. Generate Vertices & Weights
+    for r in range(rows + 1):
+        for c in range(cols + 1):
+            # Normalized pos (0-1)
+            u = c / cols
+            v = r / rows
+            
+            # Pixel pos in Image
+            px = abs_x + (u * bbox['w'])
+            py = abs_y + (v * bbox['h'])
+            
+            # Spine Coords
+            sx, sy = image_to_spine_coords(px, py, aw, ah)
+            
+            # UVs
+            uvs.extend([u, v])
+            
+            # --- WEIGHT PAINTING LOGIC ---
+            # Calculate distance to Owner Bone vs Parent Bone
+            # This is a heuristic. Real rigging uses geodesic voxel binding.
+            # Here: "If vertex is at top of part, blend with parent."
+            
+            # Relative pos to bone
+            rel_x = sx - bone_sx
+            rel_y = sy - bone_sy
+            
+            # Weight Calculation
+            # Default: 100% Owner
+            w_owner = 1.0
+            w_parent = 0.0
+            
+            # Blending logic for limbs
+            is_limb = "arm" in part_name or "leg" in part_name
+            if is_limb and parent_bone and parent_bone["name"] != "torso" and parent_bone["name"] != "root":
+                # If we are "upper" part of a limb (v < 0.2), blend with parent
+                # Actually, check direction. Assuming standard T-pose or down-pose.
+                # Simple heuristic: v (vertical) 0.0 is top.
+                if v < 0.3: 
+                    # Blend factor 0.0 -> 0.5 (at top edge)
+                    w_parent = 0.5 * (1.0 - (v / 0.3))
+                    w_owner = 1.0 - w_parent
+            
+            # Append Vertex Data (Weighted)
+            # Format: [BoneCount, BoneIndex, RelX, RelY, Weight, ...]
+            if w_parent > 0.01:
+                # Two bones
+                # Parent Relative
+                p_rel_x = sx - parent_sx
+                p_rel_y = sy - parent_sy
+                
+                # We need Indices of bones in the skeleton list?
+                # Actually Spine JSON just needs vertices relative to the bone if not weighted?
+                # Wait, "type": "mesh" requires specific vertex format.
+                # Weighted Mesh Format: 
+                # vertices: [ count, boneIndex1, x1, y1, w1, boneIndex2, x2, y2, w2, ... ]
+                
+                # Find indices (0-based index in the 'bones' array)
+                idx_owner = all_bones.index(owner_bone)
+                idx_parent = all_bones.index(parent_bone)
+                
+                vertices.extend([
+                    2, # Count
+                    idx_owner, round(rel_x, 2), round(rel_y, 2), round(w_owner, 3),
+                    idx_parent, round(p_rel_x, 2), round(p_rel_y, 2), round(w_parent, 3)
+                ])
+            else:
+                # One bone (Standard)
+                # If mesh is weighted, we MUST use weighted format for all vertices? Yes.
+                idx_owner = all_bones.index(owner_bone)
+                vertices.extend([
+                    1, # Count
+                    idx_owner, round(rel_x, 2), round(rel_y, 2), 1.0
+                ])
+
+    # 5. Generate Triangles (Indices)
+    for r in range(rows):
+        for c in range(cols):
+            # Vertex indices
+            v1 = r * (cols + 1) + c
+            v2 = v1 + 1
+            v3 = (r + 1) * (cols + 1) + c
+            v4 = v3 + 1
+            
+            # Two triangles per quad
+            triangles.extend([v1, v3, v2])
+            triangles.extend([v2, v3, v4])
+
+    return {
+        "type": "mesh",
+        "uvs": uvs,
+        "triangles": triangles,
+        "vertices": vertices,
+        "hull": 4, # Just the corners? Optional.
+        # "edges": ... # Optional for editor lines
+        "width": w,
+        "height": h
+    }
+
+    
+
+def visualize_skeleton(skeleton_json: Dict[str, Any], bg_image_path: str, output_path: str):
+    """
+    Draws the generated skeleton on top of the character image for debugging.
+    """
+    import cv2
+    import numpy as np
+    
+    # Load background (Assembly Preview)
+    if not os.path.exists(bg_image_path):
+        print(f"Debug: Image not found {bg_image_path}")
+        return
+
+    img = cv2.imread(bg_image_path, cv2.IMREAD_UNCHANGED)
+    if img is None: return
+    
+    # Create canvas (handle alpha)
+    if img.shape[2] == 4:
+        # Composite over white for visibility
+        alpha = img[:, :, 3] / 255.0
+        bg = np.ones_like(img[:, :, :3]) * 255
+        for c in range(3):
+            bg[:, :, c] = img[:, :, c] * alpha + bg[:, :, c] * (1 - alpha)
+        img = bg.astype(np.uint8)
+    
+    # Get dimensions
+    h, w = img.shape[:2]
+    cx, cy = w / 2, h / 2
+    
+    # Helper to convert Spine Coords -> Image Pixel Coords
+    # Spine: Center (0,0) is in middle, Y points UP
+    # Image: (0,0) is top-left, Y points DOWN
+    def to_pixel(sx, sy):
+        px = cx + sx
+        py = cy - sy # Flip Y
+        return int(px), int(py)
+
+    # Calculate Absolute Positions
+    bones = skeleton_json["bones"]
+    abs_pos = {} # {bone_name: (x, y)}
+    
+    # 1. Resolve Root
+    root = next(b for b in bones if b["name"] == "root")
+    abs_pos["root"] = (root["x"], root["y"])
+    
+    # 2. Resolve Children (Iterative to handle hierarchy order)
+    # Simple approach: Iterate multiple times to resolve dependencies
+    for _ in range(5): 
+        for b in bones:
+            if b["name"] in abs_pos: continue
+            parent = b.get("parent")
+            if parent and parent in abs_pos:
+                px, py = abs_pos[parent]
+                abs_pos[b["name"]] = (px + b["x"], py + b["y"])
+
+    # Draw Bones
+    for b in bones:
+        name = b["name"]
+        if name not in abs_pos: continue
+        
+        curr = abs_pos[name]
+        start_pt = to_pixel(*curr)
+        
+        # Draw Joint (Circle)
+        color = (0, 0, 255) if "leg" in name else ((0, 255, 0) if "arm" in name else (255, 0, 0))
+        cv2.circle(img, start_pt, 5, color, -1)
+        
+        # Draw Bone (Line to Parent)
+        parent = b.get("parent")
+        if parent and parent in abs_pos:
+            parent_pt = to_pixel(*abs_pos[parent])
+            cv2.line(img, start_pt, parent_pt, (200, 200, 200), 2)
+            
+    # Save
+    cv2.imwrite(output_path, img)
+    print(f"Skeleton debug saved to: {output_path}")

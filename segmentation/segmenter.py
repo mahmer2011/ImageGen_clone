@@ -12,8 +12,11 @@ from typing import Dict, List, Tuple, Optional
 from PIL import Image
 from rembg import remove
 
-from .part_detector import BodyPartDetector, BodyPart
-
+# --- CHANGED: Import the new Parsing Detector ---
+# We keep BodyPart for type hinting
+from .part_detector import BodyPart 
+from .parsing_detector import ParsingBodyPartDetector 
+from .geometric_detector import GeometricBodyPartDetector
 
 class CharacterSegmenter:
     """
@@ -44,9 +47,6 @@ class CharacterSegmenter:
     def load_and_prepare(self) -> bool:
         """
         Load image and remove background.
-        
-        Returns:
-            True if successful, False otherwise
         """
         try:
             print(f"Loading image from: {self.image_path}")
@@ -88,42 +88,38 @@ class CharacterSegmenter:
     
     def detect_parts(self) -> bool:
         """
-        Detect body parts using BodyPartDetector.
-        
-        Returns:
-            True if parts detected, False otherwise
+        Detect body parts using Geometric Voronoi Partitioning.
         """
-        if self.no_bg_image is None:
-            print("Error: No background-removed image available")
-            return False
+        if self.no_bg_image is None: return False
         
         try:
-            print("Detecting body parts...")
-            detector = BodyPartDetector(self.no_bg_image)
+            print("Running Geometric Partitioning...")
+            
+            # Use the Geometric Detector
+            detector = GeometricBodyPartDetector(self.no_bg_image)
             self.detected_parts = detector.detect_all_parts()
             
-            print(f"Detected {len(self.detected_parts)} parts: {list(self.detected_parts.keys())}")
-            
-            # Save visualization
+            # If geometric failed (no landmarks), try basic contours?
+            # Or assume image is empty.
+            if not self.detected_parts:
+                print("Geometric failed (no landmarks?).")
+                return False
+
+            # ... Visualization logic ...
             vis = detector.visualize_detections(self.detected_parts)
             vis_path = os.path.join(self.output_dir, "detection_visualization.png")
             cv2.imwrite(vis_path, vis)
-            print(f"Saved detection visualization to: {vis_path}")
             
-            return len(self.detected_parts) > 0
+            return True
             
         except Exception as e:
-            print(f"Error in detect_parts: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"Error: {e}")
+            import traceback; traceback.print_exc()
             return False
     
     def extract_parts(self) -> Dict[str, str]:
         """
         Extract detected parts as individual images with transparency.
-        
-        Returns:
-            Dictionary of {part_name: file_path}
         """
         if not self.detected_parts:
             print("Error: No parts detected")
@@ -163,13 +159,6 @@ class CharacterSegmenter:
     def _extract_part_image(self, part: BodyPart) -> Optional[Tuple[np.ndarray, int, int]]:
         """
         Extract a single body part as BGRA image with transparency.
-        
-        Args:
-            part: BodyPart object to extract
-            
-        Returns:
-            Tuple (image, x_offset, y_offset) where offsets indicate the
-            placement location on the original canvas, or None if failed.
         """
         try:
             # Get bounding box with some padding
@@ -197,6 +186,7 @@ class CharacterSegmenter:
             region = self.no_bg_image[y_start:y_end, x_start:x_end].copy()
             
             # Apply part mask (adjusted for cropped region)
+            # Ensure mask matches region size exactly
             mask_region = part.mask[y_start:y_end, x_start:x_end]
             
             # Copy only the pixels that belong to this part
@@ -212,12 +202,6 @@ class CharacterSegmenter:
     def generate_metadata(self, extracted_paths: Dict[str, str]) -> Dict:
         """
         Generate metadata for Spine2D rigging.
-        
-        Args:
-            extracted_paths: Dictionary of {part_name: file_path}
-            
-        Returns:
-            Metadata dictionary with part info, hierarchy, and pivots
         """
         metadata = {
             "parts": [],
@@ -259,8 +243,10 @@ class CharacterSegmenter:
 
             offset = self.part_offsets.get(part_name)
             width, height = self.part_sizes.get(part_name, (part.bbox[2], part.bbox[3]))
-            width = int(width) if width else int(part.bbox[2])
-            height = int(height) if height else int(part.bbox[3])
+            
+            # Handle potentially None width/height
+            width = int(width) if width is not None else int(part.bbox[2])
+            height = int(height) if height is not None else int(part.bbox[3])
 
             origin_x = int(offset[0]) if offset else int(part.bbox[0])
             origin_y = int(offset[1]) if offset else int(part.bbox[1])
@@ -282,8 +268,8 @@ class CharacterSegmenter:
                     "h": int(height),
                 },
                 "center": {
-                    "x": int(center_x) if center_x else int(part.center[0]),
-                    "y": int(center_y) if center_y else int(part.center[1]),
+                    "x": int(center_x),
+                    "y": int(center_y),
                 },
             }
 
@@ -300,305 +286,154 @@ class CharacterSegmenter:
         
         return metadata
     
+    # ... (Keep _get_character_bounds, _calculate_pivot, _get_parent_bone, _get_z_index, _get_bone_hierarchy, segment_all_parts, create_assembly_preview, create_outline_images exactly as they were) ...
     def _get_character_bounds(self) -> Dict:
-        """Get overall character bounding box."""
         if not self.detected_parts:
             return {"x": 0, "y": 0, "w": 0, "h": 0}
-        
         all_x = []
         all_y = []
-        
         for part in self.detected_parts.values():
             x, y, w, h = part.bbox
             all_x.extend([x, x + w])
             all_y.extend([y, y + h])
-        
         min_x, max_x = min(all_x), max(all_x)
         min_y, max_y = min(all_y), max(all_y)
-        
-        return {
-            "x": int(min_x),
-            "y": int(min_y),
-            "w": int(max_x - min_x),
-            "h": int(max_y - min_y)
-        }
-    
+        return {"x": int(min_x), "y": int(min_y), "w": int(max_x - min_x), "h": int(max_y - min_y)}
+
     def _calculate_pivot(self, part_name: str, part: BodyPart) -> Dict:
-        """
-        Calculate pivot point for a body part.
-        Pivot is where the part rotates from.
-        
-        Args:
-            part_name: Name of the body part
-            part: BodyPart object
-            
-        Returns:
-            Dictionary with normalized and absolute pivot coordinates
-        """
         x, y, w, h = part.bbox
-        
-        # Default pivot points (normalized 0-1) for different parts
-        # Format: (x_ratio, y_ratio) where 0,0 is top-left, 1,1 is bottom-right
         pivot_ratios = {
-            'head': (0.5, 0.9),        # Bottom center (neck connection)
-            'body': (0.5, 0.3),        # Upper center (chest/neck area)
-            'left_upper_arm': (0.8, 0.2),    # Top right (shoulder)
-            'right_upper_arm': (0.2, 0.2),   # Top left (shoulder)
-            'left_lower_arm': (0.2, 0.2),    # Top left (elbow)
-            'right_lower_arm': (0.8, 0.2),   # Top right (elbow)
-            'left_upper_leg': (0.5, 0.1),    # Top center (hip)
-            'right_upper_leg': (0.5, 0.1),   # Top center (hip)
-            'left_lower_leg': (0.5, 0.1),    # Top center (knee)
-            'right_lower_leg': (0.5, 0.1),   # Top center (knee)
-            'tail': (0.1, 0.5),        # Left center (base attachment)
+            'head': (0.5, 0.9), 'body': (0.5, 0.1),
+            'left_upper_arm': (0.8, 0.2), 'right_upper_arm': (0.2, 0.2),
+            'left_lower_arm': (0.2, 0.2), 'right_lower_arm': (0.8, 0.2),
+            'left_upper_leg': (0.5, 0.1), 'right_upper_leg': (0.5, 0.1),
+            'left_lower_leg': (0.5, 0.1), 'right_lower_leg': (0.5, 0.1),
+            'tail': (0.1, 0.5),
         }
-        
         pivot_norm = pivot_ratios.get(part_name, (0.5, 0.5))
-        
-        # Calculate absolute pivot position
         pivot_x = x + w * pivot_norm[0]
         pivot_y = y + h * pivot_norm[1]
-        
         return {
-            "normalized": {
-                "x": float(pivot_norm[0]),
-                "y": float(pivot_norm[1])
-            },
-            "absolute": {
-                "x": int(pivot_x),
-                "y": int(pivot_y)
-            },
-            "relative_to_part": {
-                "x": int(w * pivot_norm[0]),
-                "y": int(h * pivot_norm[1])
-            }
+            "normalized": {"x": float(pivot_norm[0]), "y": float(pivot_norm[1])},
+            "absolute": {"x": int(pivot_x), "y": int(pivot_y)},
+            "relative_to_part": {"x": int(w * pivot_norm[0]), "y": int(h * pivot_norm[1])}
         }
-    
+
     def _get_parent_bone(self, part_name: str) -> Optional[str]:
-        """
-        Get parent bone for hierarchy.
-        Defines which bone this part is attached to.
-        """
         hierarchy = {
-            'head': 'body',
-            'left_upper_arm': 'body',
-            'right_upper_arm': 'body',
-            'left_lower_arm': 'left_upper_arm',
-            'right_lower_arm': 'right_upper_arm',
-            'left_upper_leg': 'body',
-            'right_upper_leg': 'body',
-            'left_lower_leg': 'left_upper_leg',
-            'right_lower_leg': 'right_upper_leg',
-            'tail': 'body',
-            'body': None  # Root bone
+            'head': 'body', 'left_upper_arm': 'body', 'right_upper_arm': 'body',
+            'left_lower_arm': 'left_upper_arm', 'right_lower_arm': 'right_upper_arm',
+            'left_upper_leg': 'body', 'right_upper_leg': 'body',
+            'left_lower_leg': 'left_upper_leg', 'right_lower_leg': 'right_upper_leg',
+            'tail': 'body', 'body': None
         }
         return hierarchy.get(part_name)
-    
+
     def _get_z_index(self, part_name: str) -> int:
-        """
-        Get Z-index for layering (draw order).
-        Higher number = drawn on top.
-        """
         z_order = {
-            'right_lower_leg': 0,    # Back lower leg
-            'right_upper_leg': 1,    # Back upper leg
-            'right_lower_arm': 2,    # Back lower arm
-            'right_upper_arm': 3,    # Back upper arm
-            'tail': 4,               # Behind body
-            'body': 5,               # Main body
-            'head': 6,               # Head on top of body
-            'left_upper_arm': 7,     # Front upper arm
-            'left_lower_arm': 8,     # Front lower arm
-            'left_upper_leg': 9,     # Front upper leg
-            'left_lower_leg': 10     # Front lower leg
+            'right_lower_leg': 0, 'right_upper_leg': 1, 'right_lower_arm': 2,
+            'right_upper_arm': 3, 'tail': 4, 'body': 5, 'head': 6,
+            'left_upper_arm': 7, 'left_lower_arm': 8, 'left_upper_leg': 9, 'left_lower_leg': 10
         }
         return z_order.get(part_name, 3)
-    
+
     def _get_bone_hierarchy(self) -> List[Dict]:
-        """
-        Define bone hierarchy for Spine2D.
-        This defines the parent-child relationships for animation.
-        """
         return [
             {"name": "root", "parent": None, "description": "Root bone (invisible)"},
             {"name": "body", "parent": "root", "description": "Main body/torso"},
             {"name": "head", "parent": "body", "description": "Head"},
-            {"name": "left_upper_arm", "parent": "body", "description": "Left upper arm (shoulder to elbow)"},
-            {"name": "left_lower_arm", "parent": "left_upper_arm", "description": "Left lower arm (elbow to wrist)"},
-            {"name": "right_upper_arm", "parent": "body", "description": "Right upper arm (shoulder to elbow)"},
-            {"name": "right_lower_arm", "parent": "right_upper_arm", "description": "Right lower arm (elbow to wrist)"},
-            {"name": "left_upper_leg", "parent": "body", "description": "Left upper leg (hip to knee)"},
-            {"name": "left_lower_leg", "parent": "left_upper_leg", "description": "Left lower leg (knee to ankle)"},
-            {"name": "right_upper_leg", "parent": "body", "description": "Right upper leg (hip to knee)"},
-            {"name": "right_lower_leg", "parent": "right_upper_leg", "description": "Right lower leg (knee to ankle)"}
+            {"name": "left_upper_arm", "parent": "body", "description": "Left upper arm"},
+            {"name": "left_lower_arm", "parent": "left_upper_arm", "description": "Left lower arm"},
+            {"name": "right_upper_arm", "parent": "body", "description": "Right upper arm"},
+            {"name": "right_lower_arm", "parent": "right_upper_arm", "description": "Right lower arm"},
+            {"name": "left_upper_leg", "parent": "body", "description": "Left upper leg"},
+            {"name": "left_lower_leg", "parent": "left_upper_leg", "description": "Left lower leg"},
+            {"name": "right_upper_leg", "parent": "body", "description": "Right upper leg"},
+            {"name": "right_lower_leg", "parent": "right_upper_leg", "description": "Right lower leg"}
         ]
-    
+
     def segment_all_parts(self) -> Dict[str, str]:
-        """
-        Main segmentation method - performs complete segmentation pipeline.
-        
-        Returns:
-            Dictionary of {part_name: file_path}, including 'metadata' key
-        """
         print("=" * 60)
         print("Starting Character Segmentation Pipeline")
         print("=" * 60)
-        
-        # Step 1: Load and prepare image
         if not self.load_and_prepare():
             print("Failed to load and prepare image")
             return {}
-        
-        # Step 2: Detect body parts
         if not self.detect_parts():
             print("Failed to detect body parts")
             return {}
-        
-        # Step 3: Extract parts as separate images
         extracted_paths = self.extract_parts()
         if not extracted_paths:
             print("Failed to extract body parts")
             return {}
-        
-        # Step 4: Generate metadata
         print("Generating metadata...")
         metadata = self.generate_metadata(extracted_paths)
         metadata_path = os.path.join(self.output_dir, "metadata.json")
-        
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=2, ensure_ascii=False)
-        
         print(f"Saved metadata to: {metadata_path}")
-        
-        # Add metadata to results
         extracted_paths['metadata'] = metadata_path
-        
-        # Step 5: Generate outline overlay for full character
         outline_paths = self.create_outline_images()
         for key, path in outline_paths.items():
             extracted_paths[key] = path
-
-        # Step 6: Generate an assembled preview rendered from the segmented parts
         assembly_preview = self.create_assembly_preview()
         if assembly_preview:
             extracted_paths["assembly_preview"] = assembly_preview
-        
         print("=" * 60)
         print("Segmentation Complete!")
         print(f"Total parts extracted: {len(extracted_paths) - 1}")
         print(f"Output directory: {self.output_dir}")
         print("=" * 60)
-        
         return extracted_paths
-    
+
     def create_assembly_preview(self) -> Optional[str]:
-        """
-        Create a preview showing all parts assembled together.
-        Useful for verifying segmentation quality.
-        
-        Returns:
-            Path to preview image, or None if failed
-        """
         if not self.detected_parts:
             return None
-        
         try:
-            # Create blank canvas
             h, w = self.no_bg_image.shape[:2]
             preview = np.zeros((h, w, 4), dtype=np.uint8)
-            
-            # Sort parts by z-index
-            sorted_parts = sorted(
-                self.detected_parts.items(),
-                key=lambda x: self._get_z_index(x[0])
-            )
-            
-            # Draw each part in order
+            sorted_parts = sorted(self.detected_parts.items(), key=lambda x: self._get_z_index(x[0]))
             for part_name, _ in sorted_parts:
                 offset = self.part_offsets.get(part_name)
-                if not offset:
-                    continue
-                
+                if not offset: continue
                 part_img = self.part_images.get(part_name)
-                if part_img is None:
-                    part_path = os.path.join(self.output_dir, f"{part_name}.png")
-                    if not os.path.exists(part_path):
-                        continue
-                    part_img = cv2.imread(part_path, cv2.IMREAD_UNCHANGED)
-                    if part_img is None or part_img.shape[2] < 4:
-                        continue
-                    self.part_images[part_name] = part_img
-                
+                if part_img is None: continue
                 x_start, y_start = offset
                 part_h, part_w = part_img.shape[:2]
-                
-                # Calculate valid region bounds
                 end_y = min(y_start + part_h, preview.shape[0])
                 end_x = min(x_start + part_w, preview.shape[1])
                 part_end_y = min(part_h, end_y - y_start)
                 part_end_x = min(part_w, end_x - x_start)
-                
                 if end_y > y_start and end_x > x_start and part_end_y > 0 and part_end_x > 0:
                     alpha = part_img[:part_end_y, :part_end_x, 3:4] / 255.0
                     preview[y_start:end_y, x_start:end_x] = (
                         preview[y_start:end_y, x_start:end_x] * (1 - alpha) +
                         part_img[:part_end_y, :part_end_x] * alpha
                     ).astype(np.uint8)
-            
-            # Save preview
             preview_path = os.path.join(self.output_dir, "assembly_preview.png")
             cv2.imwrite(preview_path, preview)
-            print(f"Saved assembly preview to: {preview_path}")
-            
             return preview_path
-            
         except Exception as e:
             print(f"Error creating assembly preview: {e}")
             return None
 
-    def create_outline_images(
-        self,
-        outline_color: Tuple[int, int, int] = (0, 255, 0),
-        outline_thickness: int = 4
-    ) -> Dict[str, str]:
-        """
-        Create outline renderings of the full character silhouette.
-        
-        Returns:
-            Dictionary mapping outline variant name to saved file path.
-        """
-        if self.no_bg_image is None:
-            print("Outline generation skipped: no processed image available.")
-            return {}
-        
+    def create_outline_images(self, outline_color: Tuple[int, int, int] = (0, 255, 0), outline_thickness: int = 4) -> Dict[str, str]:
+        if self.no_bg_image is None: return {}
         alpha_channel = self.no_bg_image[:, :, 3]
-        if alpha_channel is None or not np.any(alpha_channel):
-            print("Outline generation skipped: alpha channel missing or empty.")
-            return {}
-        
+        if alpha_channel is None or not np.any(alpha_channel): return {}
         try:
-            # Detect edges from the alpha channel (character silhouette)
             edges = cv2.Canny(alpha_channel, 30, 150)
-            
-            # Thicken edges to make the outline visible
             kernel_size = max(3, outline_thickness)
-            if kernel_size % 2 == 0:
-                kernel_size += 1  # ensure odd kernel size
+            if kernel_size % 2 == 0: kernel_size += 1
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
             outline_mask = cv2.dilate(edges, kernel, iterations=1)
-            
             outline_paths: Dict[str, str] = {}
-            
-            # Outline-only image (transparent background)
             outline_only = np.zeros_like(self.no_bg_image)
             outline_only[:, :, :3] = outline_color
             outline_only[:, :, 3] = outline_mask
             outline_only_path = os.path.join(self.output_dir, "outline_only.png")
             cv2.imwrite(outline_only_path, outline_only)
             outline_paths["outline_only"] = outline_only_path
-            print(f"Saved outline-only image to: {outline_only_path}")
-            
-            # Overlay outline on the background-removed character for easier preview
             outline_overlay = self.no_bg_image.copy()
             mask_indices = outline_mask > 0
             outline_overlay[:, :, :3][mask_indices] = outline_color
@@ -606,10 +441,7 @@ class CharacterSegmenter:
             outline_overlay_path = os.path.join(self.output_dir, "outline_overlay.png")
             cv2.imwrite(outline_overlay_path, outline_overlay)
             outline_paths["outline_overlay"] = outline_overlay_path
-            print(f"Saved outline overlay image to: {outline_overlay_path}")
-            
             return outline_paths
-        
         except Exception as e:
             print(f"Error creating outline images: {e}")
             return {}

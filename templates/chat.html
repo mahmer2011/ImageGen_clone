@@ -280,6 +280,12 @@
           // Add assistant response
           addMessage('assistant', data.response);
           
+          // --- NEW: Handle Background Jobs (Polling) ---
+          if (data.action === 'wait' && data.job_id) {
+            pollJobStatus(data.job_id);
+          }
+          // ---------------------------------------------
+          
           // Handle special actions
           if (data.action === 'play' && data.data?.animation) {
             playAnimation(data.data.animation);
@@ -334,6 +340,76 @@
 
       // Check if there's an existing spine project and load it
       // This would need to be populated by the backend
+
+      // ... existing functions (exportSpineProject, etc.) ...
+
+    function pollJobStatus(jobId) {
+        const pollInterval = setInterval(() => {
+            fetch(`/api/job_status/${jobId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === "completed") {
+                        clearInterval(pollInterval);
+                        
+                        // 1. Show Success Message
+                        addMessage("assistant", data.message);
+                        
+                        // 2. Display the Image in Chat
+                        if (data.data && data.data.image_url) {
+                            const messagesDiv = document.getElementById('chat-messages');
+                            const lastMsg = messagesDiv.lastElementChild;
+                            
+                            // Create image element
+                            const img = document.createElement('img');
+                            img.src = data.data.image_url;
+                            img.style.maxWidth = '200px';
+                            img.style.marginTop = '10px';
+                            img.style.borderRadius = '8px';
+                            img.style.cursor = 'pointer';
+                            img.onclick = () => window.open(data.data.image_url, '_blank');
+                            
+                            lastMsg.appendChild(document.createElement('br'));
+                            lastMsg.appendChild(img);
+                            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+                            // 3. Auto-load Animation Preview
+                            if (data.data.spine_json && data.data.spine_atlas) {
+                                currentImageId = data.data.image_id; // Store ID for export
+                                
+                                // Show the viewer container
+                                document.getElementById('preview-welcome').style.display = 'none';
+                                document.getElementById('spine-viewer-section').style.display = 'block';
+                                
+                                // Initialize viewer if needed
+                                if (!spineViewer) {
+                                    spineViewer = new SpineViewer('spine-canvas');
+                                }
+                                
+                                // Load the new character
+                                spineViewer.loadSkeleton(
+                                    data.data.spine_json, 
+                                    data.data.spine_atlas
+                                ).then(() => {
+                                    updateCurrentAnimation('idle'); // Auto-play idle
+                                });
+                            }
+                        }
+                        
+                    } else if (data.status === "failed") {
+                        clearInterval(pollInterval);
+                        addMessage("assistant", "❌ " + data.message);
+                    } else {
+                        // Still processing... 
+                        // You could update a status indicator here if you wanted
+                        console.log("Job processing: " + data.step);
+                    }
+                })
+                .catch(error => {
+                    console.error("Polling error:", error);
+                    clearInterval(pollInterval);
+                });
+        }, 2000); // Check every 2 seconds
+    }
     </script>
   </body>
 </html>
