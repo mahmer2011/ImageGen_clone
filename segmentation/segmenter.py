@@ -12,11 +12,27 @@ from typing import Dict, List, Tuple, Optional
 from PIL import Image
 from rembg import remove
 
-# --- CHANGED: Import the new Parsing Detector ---
+# --- Import detectors ---
 # We keep BodyPart for type hinting
 from .part_detector import BodyPart 
 from .parsing_detector import ParsingBodyPartDetector 
 from .geometric_detector import GeometricBodyPartDetector
+
+# Import CartoonBodyPartDetector (ONNX-based)
+try:
+    from .cartoon_detector import CartoonBodyPartDetector
+    CARTOON_DETECTOR_AVAILABLE = True
+except ImportError:
+    CARTOON_DETECTOR_AVAILABLE = False
+    CartoonBodyPartDetector = None
+
+# Import AnimatedDrawings Rig
+try:
+    from .ad_rigging import AnimatedDrawingsRig
+    AD_RIG_AVAILABLE = True
+except ImportError:
+    AD_RIG_AVAILABLE = False
+    AnimatedDrawingsRig = None
 
 class CharacterSegmenter:
     """
@@ -59,13 +75,23 @@ class CharacterSegmenter:
             
             print(f"Image loaded: {self.original_image.shape}")
             
-            # Remove background using rembg
-            print("Removing background...")
-            with open(self.image_path, 'rb') as f:
-                input_data = f.read()
-            
-            # Remove background
-            output_data = remove(input_data)
+            # ENFORCE BACKGROUND CLEANUP FIRST
+            # Use Alpha Matting for cleaner edges
+            print("Cleaning background with Alpha Matting...")
+            try:
+                from rembg import remove, new_session
+                # Use optimized model for human/character segmentation
+                session = new_session("u2net_human_seg")
+                with open(self.image_path, 'rb') as f:
+                    input_data = f.read()
+                # Remove background with alpha matting for cleaner edges
+                output_data = remove(input_data, session=session, alpha_matting=True)
+            except Exception as e:
+                print(f"Warning: Alpha matting failed ({e}), using standard background removal...")
+                # Fallback to standard removal
+                with open(self.image_path, 'rb') as f:
+                    input_data = f.read()
+                output_data = remove(input_data)
             
             # Convert to numpy array
             no_bg_pil = Image.open(io.BytesIO(output_data)).convert("RGBA")
@@ -88,34 +114,113 @@ class CharacterSegmenter:
     
     def detect_parts(self) -> bool:
         """
-        Detect body parts using Geometric Voronoi Partitioning.
-        """
-        if self.no_bg_image is None: return False
+        Detect body parts.
         
+        PRIORITY ORDER (UPDATED):
+        1. GeometricDetector (with AnimatedDrawings or MediaPipe) - Primary
+        2. CartoonBodyPartDetector (RTMDet ONNX) - Fallback
+        """
+        if self.no_bg_image is None: 
+            return False
+        
+        # Flag to track success to avoid running secondary methods if primary works
+        success = False
+
+        # ============================================================
+        # METHOD 1: GeometricDetector (Primary)
+        # ============================================================
+        # Enhanced with AnimatedDrawings skeleton if available
+        # Falls back to MediaPipe landmarks if AD not available
         try:
-            print("Running Geometric Partitioning...")
+            print("\n" + "="*60)
+            print("METHOD 1: Running GeometricDetector (Priority)")
+            print("="*60)
             
-            # Use the Geometric Detector
             detector = GeometricBodyPartDetector(self.no_bg_image)
+            
+            # INTEGRATE ANIMATED DRAWINGS FOR LANDMARKS
+            # Instead of MediaPipe, we ask AD for the skeleton if available
+            if AD_RIG_AVAILABLE and AnimatedDrawingsRig:
+                try:
+                    print("  Attempting to use AnimatedDrawings skeleton...")
+                    ad_rig = AnimatedDrawingsRig()
+                    ad_landmarks = ad_rig.get_landmarks(self.image_path)
+                    
+                    if ad_landmarks:
+                        print("  ✓ Using AnimatedDrawings skeleton for partitioning")
+                        # Convert AD landmarks to detector's keypoints format
+                        detector.keypoints_pixel = {
+                            lm['name']: (int(lm['x']), int(lm['y'])) 
+                            for lm in ad_landmarks
+                        }
+                    else:
+                        print("  ⚠ AnimatedDrawings returned no landmarks, using MediaPipe")
+                except Exception as e:
+                    print(f"  ⚠ AnimatedDrawings error: {e}, using MediaPipe")
+            else:
+                print("  Using MediaPipe landmarks (AnimatedDrawings not available)")
+            
             self.detected_parts = detector.detect_all_parts()
             
-            # If geometric failed (no landmarks), try basic contours?
-            # Or assume image is empty.
-            if not self.detected_parts:
-                print("Geometric failed (no landmarks?).")
-                return False
-
-            # ... Visualization logic ...
-            vis = detector.visualize_detections(self.detected_parts)
-            vis_path = os.path.join(self.output_dir, "detection_visualization.png")
-            cv2.imwrite(vis_path, vis)
-            
-            return True
+            if self.detected_parts:
+                print("\n✓ SUCCESS: Using GeometricDetector")
+                print(f"  Detected {len(self.detected_parts)} body parts")
+                print("="*60 + "\n")
+                self._save_visualization(detector)
+                success = True
+            else:
+                print("\n⚠ GeometricDetector found no parts (no landmarks detected)")
+                print("  → Attempting fallback to CartoonDetector...")
             
         except Exception as e:
-            print(f"Error: {e}")
-            import traceback; traceback.print_exc()
-            return False
+            print(f"\n⚠ GeometricDetector error: {e}")
+            print("  → Attempting fallback to CartoonDetector...")
+            import traceback
+            traceback.print_exc()
+
+        if success:
+            return True
+
+        # ============================================================
+        # METHOD 2: CartoonBodyPartDetector (Fallback)
+        # ============================================================
+        # Uses RTMDet for instance detection and part segmentation
+        if CARTOON_DETECTOR_AVAILABLE and CartoonBodyPartDetector:
+            try:
+                print("\n" + "="*60)
+                print("METHOD 2: Attempting CartoonBodyPartDetector (RTMDet ONNX)")
+                print("="*60)
+                detector = CartoonBodyPartDetector(self.no_bg_image)
+                self.detected_parts = detector.detect_all_parts()
+                
+                if self.detected_parts and len(self.detected_parts) > 0:
+                    print("\n✓ SUCCESS: Using CartoonBodyPartDetector (RTMDet)")
+                    print(f"  Detected {len(self.detected_parts)} body parts")
+                    print("="*60 + "\n")
+                    self._save_visualization(detector)
+                    return True
+                else:
+                    print("⚠ CartoonBodyPartDetector returned no parts")
+            except Exception as e:
+                print(f"⚠ CartoonBodyPartDetector error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # If we get here, everything failed
+        print("\n✗ FAILED: All segmentation methods failed")
+        return False
+    
+    def _save_visualization(self, detector) -> bool:
+        """Save detection visualization if detector supports it."""
+        try:
+            if hasattr(detector, 'visualize_detections'):
+                vis = detector.visualize_detections(self.detected_parts)
+                vis_path = os.path.join(self.output_dir, "detection_visualization.png")
+                cv2.imwrite(vis_path, vis)
+            return True
+        except Exception as e:
+            print(f"Warning: Could not save visualization: {e}")
+            return True  # Still return True as detection succeeded
     
     def extract_parts(self) -> Dict[str, str]:
         """
@@ -286,7 +391,6 @@ class CharacterSegmenter:
         
         return metadata
     
-    # ... (Keep _get_character_bounds, _calculate_pivot, _get_parent_bone, _get_z_index, _get_bone_hierarchy, segment_all_parts, create_assembly_preview, create_outline_images exactly as they were) ...
     def _get_character_bounds(self) -> Dict:
         if not self.detected_parts:
             return {"x": 0, "y": 0, "w": 0, "h": 0}

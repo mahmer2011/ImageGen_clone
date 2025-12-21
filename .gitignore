@@ -182,3 +182,12 @@ cython_debug/
 
 # Generated images and Spine exports
 static/generated_images/
+
+# Model weights and checkpoints (too large for git)
+weights/*.onnx
+weights/*.pt
+weights/*.pth
+weights/*.pkl
+weights/*.ckpt
+!weights/.gitkeep
+!weights/README.md

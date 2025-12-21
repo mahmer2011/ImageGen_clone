@@ -1,0 +1,4 @@
+# This file ensures the weights directory is tracked by git
+# Model files should be placed here but are typically too large for git
+# Add model files to .gitignore to avoid committing large binary files
+
